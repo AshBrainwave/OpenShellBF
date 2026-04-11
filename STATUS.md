@@ -12,7 +12,20 @@ Updated by: bluefield-codex
 
 - Source of truth: `docs/unified-spec.md`
 - Runtime direction: microVM-first
-- Open question: can `openshell-vm` expose a second NIC suitable for DPU-protected egress?
+- Open question resolved: DPU is already in switchdev mode with OVS bridges configured. VF representors will appear on DPU when VFs are created from the host. The architecture for the first proof slice is confirmed viable.
+
+## DPU network map (verified 2026-04-11)
+
+```
+Physical wire 0 (p0)  ←→  ovsbr1  ←→  pf0hpf (host PF0 representor, enp179s0f0np0)
+                                   ←→  en3f0pf0sf0 (DPU-local SF — future gateway process)
+Physical wire 1 (p1)  ←→  ovsbr2  ←→  pf1hpf (host PF1 representor, enp179s0f1np1)
+                                   ←→  en3f1pf1sf0 (DPU-local SF — future gateway process)
+```
+
+When a VF is created from the host (`sriov_numvfs=1` on `0000:b3:00.0`):
+- Host gains: a VF netdev (e.g. `enp179s0f0v0`) attachable to microVM eth1
+- DPU gains: a VF representor netdev — add it to ovsbr1 to get DPU-visible ingress point
 
 ## Latest findings
 
@@ -22,18 +35,23 @@ Updated by: bluefield-codex
 
 ## Immediate next steps
 
-1. SSH into DPU via rshim: `ssh ubuntu@192.168.100.2`. Discover DPU-side PCI address for BF3 NICs, check eSwitch mode, enumerate representors, check OVS state.
-2. On DPU: if eSwitch is in legacy mode, switch to switchdev. Create 1 VF from DPU side or confirm host-side `sriov_numvfs` write is sufficient. Enumerate representor netdevs.
-3. On host: implement dual-NIC in `openshell-vm` (3-file change). Wire `eth1` to a TAP + OVS bridge that includes the BF3 VF0 representor.
-4. Boot a VM, confirm `eth1` traffic is visible on the DPU-side representor.
-5. Install a minimal DPU-side policy gateway (iptables / nftables drop-all by default, allow one destination) and verify traffic control from DPU.
+1. **On DPU (now)**: run `ip link show` and `ip addr` to understand current interface state; check what `enp3s0f0s0` / `enp3s0f1s0` are; run `sudo ovs-ofctl dump-flows ovsbr1` to see any existing flow rules.
+2. **On host**: `echo 1 | sudo tee /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs` — create one reversible VF.
+3. **On DPU**: run `devlink port show` again to see new VF representor; add it to `ovsbr1`: `sudo ovs-vsctl add-port ovsbr1 <vf0rep>`.
+4. **On host**: implement dual-NIC in `openshell-vm` (3 files). The protected-egress socket connects to a TAP device or macvtap on the host VF netdev.
+5. **Boot test**: launch a minimal VM, send traffic from eth1, tcpdump on the DPU VF representor to confirm DPU-side visibility.
+6. **Minimal enforcement test**: add an nftables drop-all on `en3f0pf0sf0` or a flow on `ovsbr1`, verify blocked from VM side.
+7. Once DPU-side enforcement is confirmed, scaffold `dpu/control-agent` and `dpu/egress-gateway` in `~/work/OpenShell`.
 
 ## Blockers and risks
 
-- **eSwitch management is DPU-side only** (verified). `devlink dev eswitch show` on the host returns EOPNOTSUPP even with sudo. Host cannot configure eSwitch mode or enumerate representors. All BF3 eSwitch and steering work must be done via `ssh ubuntu@192.168.100.2` (rshim only).
-- eSwitch mode on the DPU is unknown until we SSH in.
-- Direct VF-backed attachment into the microVM is not yet proven. Near-term pilot path: TAP + OVS bridge to BF3 representor (DPU-controlled).
-- If `openshell-vm` cannot expose a usable second NIC, the fallback architecture may need a different runtime adapter (QEMU/KubeVirt for VF passthrough).
+- **eSwitch management is DPU-side only** (verified). Host `devlink` returns EOPNOTSUPP. All BF3 eSwitch and OVS work is done via `ssh ubuntu@192.168.100.2` (rshim only). This is by design and reinforces the trust boundary.
+- **eSwitch is already switchdev** — no mode switch needed (blocker resolved).
+- **OVS already configured** — both bridges in place with uplinks and SF ports (blocker resolved).
+- **Remaining blocker**: VF creation from the host has not been attempted. `echo 1 > /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs` needs operator approval (reversible: `echo 0` removes VFs, but beware of VF-in-use guard).
+- **Remaining blocker**: openshell-vm has no `eth1` / protected-egress path yet. Code changes required in 3 files (identified above).
+- **Remaining soft blocker**: ubuntu not in kvm group on host (usermod run but re-login needed). Can use `sudo` for initial VF experiments.
+- Direct VF passthrough into libkrun not available. Near-term path: host VF netdev → macvtap or TAP → second `krun_add_net_unixstream` call in openshell-vm. Alternatively, expose the VF via the host side and connect through OVS to the DPU bridge directly.
 
 ## Working notes
 
@@ -55,6 +73,28 @@ Updated by: bluefield-codex
   - Remote for OpenShell: SSH only (`git@github.com:AshBrainwave/OpenShell.git`); no writable HTTPS remote detected.
   - Next path to investigate: hardware SR-IOV readiness (BF3 eSwitch mode, VF count, IOMMU) and openshell-vm second-NIC feasibility.
   - All docs read: unified-spec.md, design-spec.md, implementation-plan.md, bluefield-codex-handoff.txt.
+
+- 2026-04-11 07:xx UTC DPU-PROBE (operator-verified at DPU terminal via rshim)
+  - Commands run on DPU (ubuntu@localhost = 192.168.100.2): `lspci -nn | grep -i mellanox`; `devlink dev eswitch show pci/0000:03:00.0`; `devlink port show`; `ovs-vsctl show`; `sudo ovs-vsctl show`; `sudo devlink dev eswitch show pci/0000:03:00.0`.
+  - VERIFIED — DPU-side PCI address for BF3 ConnectX-7: `0000:03:00.0` (PF0), `0000:03:00.1` (PF1). Matches host-side `0000:b3:00.0/1` as expected.
+  - VERIFIED — eSwitch mode on DPU: `pci/0000:03:00.0: mode switchdev inline-mode none encap-mode basic`. Already in switchdev mode. No mode switch needed.
+  - VERIFIED — DPU devlink port map (all confirmed netdevs):
+    - `pf0hpf` — host PF0 representor (pcipf, controller 1 = host/x86, external true, MAC 48:b0:2d:a6:21:a6). Represents all host-PF0 traffic on DPU.
+    - `en3f0pf0sf0` — DPU-local scalable function SF0 on PF0 (pcisf, controller 0 = DPU ARM, state active/attached). This is the DPU process attachment point.
+    - `p0` — physical uplink port 0 (the wire).
+    - `pf1hpf` — host PF1 representor (pcipf, controller 1, external true, MAC 48:b0:2d:a6:21:a7).
+    - `en3f1pf1sf0` — DPU-local SF0 on PF1 (pcisf, controller 0, state active/attached).
+    - `p1` — physical uplink port 1 (the wire).
+    - `enp3s0f0s0` — virtual flavour, auxiliary/mlx5_core.eth.2. Likely a second SF or VF representor already instantiated. Needs investigation.
+    - `enp3s0f1s0` — virtual flavour, auxiliary/mlx5_core.eth.3. Same.
+  - VERIFIED — OVS 3.3.0040 is running on DPU. Two bridges pre-configured:
+    - `ovsbr1`: ports `p0` (wire) + `pf0hpf` (host PF0 rep) + `en3f0pf0sf0` (DPU SF) + `ovsbr1` (internal). All host PF0 traffic is already bridged through the DPU.
+    - `ovsbr2`: ports `p1` (wire) + `pf1hpf` (host PF1 rep) + `en3f1pf1sf0` (DPU SF) + `ovsbr2` (internal). Same for PF1.
+  - INFERENCE — The OVS bridge setup means ALL current host traffic on `enp179s0f0np0` already transits through the DPU's `ovsbr1` bridge. The DPU is already on-path for existing host traffic. This is stronger than expected.
+  - INFERENCE — When a VF is created from the host (echo 1 > /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs), a VF representor (e.g. `pf0vf0rep` or `enp179s0f0v0rep` style) will appear on the DPU. Adding it to `ovsbr1` gives the DPU a direct enforcement point for all VF traffic.
+  - INFERENCE — `en3f0pf0sf0` is the natural attachment point for a DPU-side gateway process (e.g. a Rust binary listening on that netdev with nftables rules). Traffic from a sandbox VF → eSwitch → VF representor → ovsbr1 → SF0 netdev → gateway process → p0 (wire).
+  - NOTE — `devlink dev eswitch show` without sudo returned EPERM on DPU. With sudo it works. DPU ubuntu user also lacks devlink privileges by default.
+  - NOTE — `enp3s0f0s0` and `enp3s0f1s0` with flavour:virtual are not yet explained. Possibly pre-created SF representors or leftover VF representors from a prior experiment. Should check with `ip link show` and `ip addr` on DPU.
 
 - 2026-04-11 07:xx UTC ESWITCH-ARCHITECTURE (operator-verified at terminal)
   - Commands run by operator: `sudo usermod -aG kvm ubuntu`; `sudo devlink dev eswitch show pci/0000:b3:00.0`.
