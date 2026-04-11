@@ -22,14 +22,18 @@ Updated by: bluefield-codex
 
 ## Immediate next steps
 
-1. Verify BlueField SR-IOV, representor, and eSwitch readiness on the lab machine.
-2. Inspect `openshell-vm` for second-NIC support and the cleanest attachment point.
-3. Try the smallest possible proof slice: one microVM, one control path, one protected-egress path.
+1. SSH into DPU via rshim: `ssh ubuntu@192.168.100.2`. Discover DPU-side PCI address for BF3 NICs, check eSwitch mode, enumerate representors, check OVS state.
+2. On DPU: if eSwitch is in legacy mode, switch to switchdev. Create 1 VF from DPU side or confirm host-side `sriov_numvfs` write is sufficient. Enumerate representor netdevs.
+3. On host: implement dual-NIC in `openshell-vm` (3-file change). Wire `eth1` to a TAP + OVS bridge that includes the BF3 VF0 representor.
+4. Boot a VM, confirm `eth1` traffic is visible on the DPU-side representor.
+5. Install a minimal DPU-side policy gateway (iptables / nftables drop-all by default, allow one destination) and verify traffic control from DPU.
 
 ## Blockers and risks
 
-- Direct VF-backed attachment into the microVM is not yet proven.
-- If `openshell-vm` cannot expose a usable second NIC, the fallback architecture may need a different runtime adapter.
+- **eSwitch management is DPU-side only** (verified). `devlink dev eswitch show` on the host returns EOPNOTSUPP even with sudo. Host cannot configure eSwitch mode or enumerate representors. All BF3 eSwitch and steering work must be done via `ssh ubuntu@192.168.100.2` (rshim only).
+- eSwitch mode on the DPU is unknown until we SSH in.
+- Direct VF-backed attachment into the microVM is not yet proven. Near-term pilot path: TAP + OVS bridge to BF3 representor (DPU-controlled).
+- If `openshell-vm` cannot expose a usable second NIC, the fallback architecture may need a different runtime adapter (QEMU/KubeVirt for VF passthrough).
 
 ## Working notes
 
@@ -51,6 +55,15 @@ Updated by: bluefield-codex
   - Remote for OpenShell: SSH only (`git@github.com:AshBrainwave/OpenShell.git`); no writable HTTPS remote detected.
   - Next path to investigate: hardware SR-IOV readiness (BF3 eSwitch mode, VF count, IOMMU) and openshell-vm second-NIC feasibility.
   - All docs read: unified-spec.md, design-spec.md, implementation-plan.md, bluefield-codex-handoff.txt.
+
+- 2026-04-11 07:xx UTC ESWITCH-ARCHITECTURE (operator-verified at terminal)
+  - Commands run by operator: `sudo usermod -aG kvm ubuntu`; `sudo devlink dev eswitch show pci/0000:b3:00.0`.
+  - VERIFIED — `sudo usermod -aG kvm ubuntu` succeeded. ubuntu is now in the kvm group (re-login or `newgrp kvm` required for the current shell to see it).
+  - VERIFIED — `sudo devlink dev eswitch show pci/0000:b3:00.0` returns "kernel answers: Operation not supported".
+  - INTERPRETATION: "Operation not supported" (EOPNOTSUPP) is not a permissions error. The kernel accepted the call but the BF3 integrated ConnectX-7 driver does not expose eSwitch management from the host x86 side. On BlueField-3, eSwitch control belongs to the DPU ARM OS, not the host. This is by design.
+  - ARCHITECTURAL IMPLICATION: The host cannot set eSwitch mode, enumerate VF representors, or steer traffic on the BF3 eSwitch. All of that must be done from the DPU side via `ssh ubuntu@192.168.100.2` (rshim path only). This is consistent with BF3's separated-mode design where the DPU ARM owns the network control plane.
+  - SECURITY NOTE: This is actually what we want — the trust boundary holds because the host cannot reach the eSwitch control plane. An adversarial host OS cannot disable DPU-side enforcement by misconfiguring the eSwitch.
+  - NEXT ACTION: SSH into the DPU via rshim (`ssh ubuntu@192.168.100.2`) and run `devlink dev eswitch show` from there to determine current mode. The DPU's internal PCI address for the same device is typically `0000:03:00.0` or similar (must discover on DPU).
 
 - 2026-04-11 06:33:43 UTC HARDWARE-PROBE-2 (full enumeration with correct tool access)
   - Commands: `lspci -nn | grep -i -E 'mellanox|nvidia|bluefield'`; `cat /sys/bus/pci/devices/*/sriov_{total,num}vfs`; `lsmod | grep -E 'vfio|kvm|iommu|mlx'`; `find /sys/kernel/iommu_groups -maxdepth 3 -type l | grep -E 'b3:00|31:00'`; `devlink dev show`; `ip link show`; `ip route`; `ip addr show tmfifo_net0`.
