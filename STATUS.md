@@ -290,5 +290,15 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
   - `crates/openshell-vm/src/main.rs`: Added `--protected-egress-socket <path>` and `--protected-egress-mac <XX:XX:XX:XX:XX:XX>` CLI flags (default MAC 52:54:00:bf:00:01). Added `parse_mac()` helper. `ProtectedEgressConfig` wired into both exec and gateway VmConfig branches.
   - `crates/openshell-vm/scripts/openshell-vm-init.sh`: Added eth1 bring-up block after eth0/dummy0 block. eth1 gets static 10.99.2.2/24, no default route (protected egress only).
   - `deploy/setup-protected-egress-vf.sh`: New one-shot host-side script for BF3 VF creation and vf-bridge launch. Validates VFIO modules, PCI device, netdev; discovers VF netdev automatically; launches vf-bridge with --netdev and --socket args.
-  - PENDING: vf-bridge binary does not yet exist — Phase 3 work. Script wires the interface contract (--netdev <vf_netdev> --socket <path>).
-  - NEXT: Phase 3 — scaffold vf-bridge crate (~100 lines Rust) to relay Ethernet frames between macvtap/TAP and the UNIX stream socket.
+  - PENDING at time of this log: vf-bridge binary did not exist — Phase 3 work.
+  - RESOLVED in commit f64c3479 below.
+- 2026-04-11 SESSION-2 VF-BRIDGE (commit f64c3479, branch codex/bluefield-probe)
+  - Phase 3 scaffolding complete. New crate: `crates/vf-bridge/`.
+  - Wire protocol confirmed from OpenShell lib.rs doc comment ("QEMU wire protocol") and gvproxy integration (`-listen-qemu`): each frame is prefixed with a 4-byte big-endian length (QEMU net-socket stream mode, same as `qemu -netdev socket,type=stream`). Reference: QEMU net/socket.c, `htonl(size)` framing.
+  - Architecture: two threads share dup'd `AF_PACKET` fd and `try_clone()`'d `UnixStream`. Thread A (guest→host): reads QEMU-framed packets from UNIX socket, writes raw Ethernet to AF_PACKET. Thread B (host→guest): reads raw Ethernet from AF_PACKET, writes QEMU-framed to UNIX socket. `PACKET_IGNORE_OUTGOING` (Linux ≥ 4.20) suppresses TX loopback. `SO_RCVTIMEO` 500ms enables clean shutdown when UNIX socket closes.
+  - `deploy/setup-protected-egress-vf.sh`: updated `--netdev` → `--ifname` to match the vf-bridge CLI.
+  - PROVEN: compilation (`cargo build -p vf-bridge`, zero warnings). QEMU framing unit tests: 4/4 pass (round-trip, zero-length rejected, oversized rejected, multiple sequential frames).
+  - UNPROVEN: runtime AF_PACKET + socket relay (requires `CAP_NET_RAW`; no root in this session). No root available; `AF_PACKET socket()` returns EPERM without the capability.
+  - TEST PROCEDURE (run as root on lenny1): `sudo ip tuntap add dev tap-vftest mode tap && sudo ip link set tap-vftest up`; `sudo ./target/release/vf-bridge --socket /tmp/test.sock --ifname tap-vftest --verbose &`; connect a test client speaking QEMU framing to `/tmp/test.sock` and send Ethernet frames; observe `[guest→host]` and `[host→guest]` log lines and final counters.
+  - FOR BF3 VF PATH: `sudo ./deploy/setup-protected-egress-vf.sh` creates VF on `enp179s0f0np0`, discovers `enp179s0f0v0`, and execs `vf-bridge --ifname enp179s0f0v0 --socket /run/openshell/vf-bridge/eth1.sock`. Then `openshell-vm --protected-egress-socket /run/openshell/vf-bridge/eth1.sock`. DPU-side representor `pf0vf0` in ovsbr1 provides enforcement point.
+  - NEXT: run the runtime test with root on lenny1 to prove TAP-backed packet flow, then VF-backed flow with a running openshell-vm. Phase 3 → Phase 4: DPU control-agent and egress-gateway on `enp3s0f0s0`.
