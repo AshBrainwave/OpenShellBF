@@ -2,6 +2,7 @@
 
 Last updated: 2026-04-11
 Updated by: bluefield-codex
+Session 2 commit: e8f43b15 (OpenShell codex/bluefield-probe)
 
 ## Current focus
 
@@ -108,6 +109,17 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
 - Prefer short dated entries below instead of rewriting history.
 
 ### Log
+
+- 2026-04-11 19:18 UTC RESUME (agent session 2)
+  - Commands: `ip link show enp179s0f0v0`; `cat /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs`; `ssh ubuntu@192.168.100.2 sudo ovs-vsctl show`; `ssh ubuntu@192.168.100.2 sudo ovs-ofctl dump-flows ovsbr1`; `ip addr show enp179s0f0v0`; `ssh ubuntu@192.168.100.2 ip -s link show pf0vf0`.
+  - VERIFIED — VF persisted through sleep: `enp179s0f0v0` UP, MAC `52:54:00:aa:bb:cc`, IP `10.99.1.1/24`, sriov_numvfs=1.
+  - VERIFIED — DPU enforcement is PROVEN. The drop flow on `pf0vf0` shows `n_packets=1500, idle_age=21` — 1500 packets from the host VF were counted and dropped by the DPU. This is not theoretical. The DPU observed, acted on, and counted real traffic.
+  - VERIFIED — `pf0vf0` representor RX stats: 1501 packets received (DPU saw them). TX: 2987 packets (normal ARP/DHCP from bridge). The slight mismatch is consistent with the ICMP allow rule below.
+  - VERIFIED — Operator added ICMP allow flow during previous session: `priority=100,icmp,in_port=pf0vf0 actions=output:p0` (idle_age=43997s, not recently used). This confirms the allow-rule mechanism works.
+  - VERIFIED — `pf0vf0` altname: `enp3s0f0nc1pf0vf0` (nc1 = controller 1 = host side, pf0vf0 = PF0 VF0).
+  - VERIFIED — devlink shows `hw_addr 00:00:00:00:00:00` for VF function — this is the hardware-assigned MAC as seen from devlink. The actual VF netdev MAC on the host is `52:54:00:aa:bb:cc` (set via `ip link`). These are independent; the DPU representor uses its own MAC for ARP/L2.
+  - STATUS: Phase 0 (hardware validation) and Phase 1 (DPU enforcement proof) are complete. Moving to implementation planning and Phase 2 (openshell-vm dual NIC).
+  - NEXT: Implementation plan updated at `docs/implementation-plan.md`. See that doc for phased execution plan.
 
 - 2026-04-11 06:33:43 UTC HANDSHAKE
   - Agent online on host `lenny1`.
@@ -272,3 +284,11 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
   - Code investigation and any code changes will happen in `/home/ubuntu/work/OpenShell`.
   - Next path to investigate after handshake publish: `/home/ubuntu/work/OpenShellBF/docs` and `/home/ubuntu/work/OpenShell/crates/openshell-vm`.
 - 2026-04-10: Initial project handoff created.
+- 2026-04-11 SESSION-2 CODE-CHANGES (commit e8f43b15, branch codex/bluefield-probe)
+  - Phase 2 scaffolding complete. All changes compile clean (`cargo check -p openshell-vm`; rustfmt passes).
+  - `crates/openshell-vm/src/lib.rs`: Added `ProtectedEgressConfig { socket_path, mac }` struct. Added `protected_egress: Option<ProtectedEgressConfig>` to `VmConfig`. Initialized to `None` in `VmConfig::gateway()`. Added `krun_add_net_unixstream` call in `launch()` (Linux only; returns `VmError::HostSetup` on non-Linux). virtio-net features: CSUM, GUEST_CSUM, GUEST_TSO4, GUEST_UFO, HOST_TSO4, HOST_UFO.
+  - `crates/openshell-vm/src/main.rs`: Added `--protected-egress-socket <path>` and `--protected-egress-mac <XX:XX:XX:XX:XX:XX>` CLI flags (default MAC 52:54:00:bf:00:01). Added `parse_mac()` helper. `ProtectedEgressConfig` wired into both exec and gateway VmConfig branches.
+  - `crates/openshell-vm/scripts/openshell-vm-init.sh`: Added eth1 bring-up block after eth0/dummy0 block. eth1 gets static 10.99.2.2/24, no default route (protected egress only).
+  - `deploy/setup-protected-egress-vf.sh`: New one-shot host-side script for BF3 VF creation and vf-bridge launch. Validates VFIO modules, PCI device, netdev; discovers VF netdev automatically; launches vf-bridge with --netdev and --socket args.
+  - PENDING: vf-bridge binary does not yet exist — Phase 3 work. Script wires the interface contract (--netdev <vf_netdev> --socket <path>).
+  - NEXT: Phase 3 — scaffold vf-bridge crate (~100 lines Rust) to relay Ethernet frames between macvtap/TAP and the UNIX stream socket.
