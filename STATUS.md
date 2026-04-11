@@ -42,4 +42,11 @@ Updated by: initial setup
 
 ### Log
 
+- 2026-04-11 00:59:27 UTC HANDSHAKE
+  - Agent online on host `lenny1`.
+  - Machine type: host x86_64 (`uname -m` = `x86_64`), not DPU ARM.
+  - Working directories: `/home/ubuntu/work/OpenShellBF` and `/home/ubuntu/work/OpenShell`.
+  - BlueField tooling appears partially present: `devlink` and `ip` are installed; `mlxconfig`, `lspci`, and `ovs-vsctl` are not currently in `PATH`.
+  - Code investigation and any code changes will happen in `/home/ubuntu/work/OpenShell`.
+  - Next path to investigate after handshake publish: `/home/ubuntu/work/OpenShellBF/docs` and `/home/ubuntu/work/OpenShell/crates/openshell-vm`.
 - 2026-04-10: Initial project handoff created.
