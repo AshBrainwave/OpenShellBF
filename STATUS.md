@@ -119,6 +119,14 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
   - Next path to investigate: hardware SR-IOV readiness (BF3 eSwitch mode, VF count, IOMMU) and openshell-vm second-NIC feasibility.
   - All docs read: unified-spec.md, design-spec.md, implementation-plan.md, bluefield-codex-handoff.txt.
 
+- 2026-04-11 07:xx UTC OVS-VF-WIRED (operator-verified on DPU)
+  - Commands: `sudo ovs-vsctl add-port ovsbr1 pf0vf0`; `sudo ovs-ofctl add-flow ovsbr1 "priority=50,in_port=pf0vf0,actions=drop"`; `sudo ovs-vsctl show`; `sudo ovs-ofctl dump-flows ovsbr1`.
+  - VERIFIED — `pf0vf0` is now a port in `ovsbr1` (confirmed in `ovs-vsctl show`).
+  - VERIFIED — Drop flow installed and confirmed: `priority=50,in_port=pf0vf0 actions=drop`, duration=147s, n_packets=0 (no traffic sent through VF yet — expected, VF still DOWN on host).
+  - VERIFIED — All four flows now in ovsbr1: priority-200 drop to 45.54.28.15; priority-100 allow tcp/443 to 140.82.116.6; priority-50 drop from pf0vf0; priority-0 NORMAL default.
+  - STATUS: DPU enforcement point for VF0 is wired and ready. The moment the host VF sends traffic, the DPU will count and drop it.
+  - PENDING: host-side verification (assign MAC+IP to enp179s0f0v0, ping through VF, confirm n_packets increments on DPU drop rule). Not yet run — paused here.
+
 - 2026-04-11 07:xx UTC VF-CREATION-AND-DPU-PROBE-DEEP (operator-verified)
   - Commands on DPU: `ip link show`; `sudo ovs-ofctl dump-flows ovsbr1`; `devlink port show` (after VF creation).
   - Commands on host: `echo 1 | sudo tee /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs`; `ip link show | grep -i enp179`.
