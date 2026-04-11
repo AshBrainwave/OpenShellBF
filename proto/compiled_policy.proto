@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package openshell.security.v1;
+
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_ALLOW = 1;
+  ACTION_DENY = 2;
+}
+
+enum RouteMode {
+  ROUTE_MODE_UNSPECIFIED = 0;
+  ROUTE_MODE_DIRECT = 1;
+  ROUTE_MODE_MANAGED_PROXY = 2;
+}
+
+enum BinaryIdentityMode {
+  BINARY_IDENTITY_MODE_UNSPECIFIED = 0;
+  BINARY_IDENTITY_MODE_DISABLED = 1;
+  BINARY_IDENTITY_MODE_ADVISORY = 2;
+  BINARY_IDENTITY_MODE_ATTESTED = 3;
+}
+
+message DestinationMatch {
+  string protocol = 1;
+  uint32 port = 2;
+  string host_pattern = 3;
+  repeated string cidrs = 4;
+  repeated string sni_patterns = 5;
+}
+
+message L7Constraint {
+  repeated string methods = 1;
+  repeated string paths = 2;
+}
+
+message CompiledRule {
+  string rule_id = 1;
+  DestinationMatch match = 2;
+  RouteMode mode = 3;
+  L7Constraint l7 = 4;
+  string credential_ref = 5;
+  Action action = 6;
+}
+
+message CompiledPolicy {
+  string sandbox_id = 1;
+  string policy_revision = 2;
+  string vf_id = 3;
+  Action default_action = 4;
+  uint32 policy_ttl_seconds = 5;
+  repeated CompiledRule rules = 6;
+  BinaryIdentityMode binary_identity_mode = 7;
+}

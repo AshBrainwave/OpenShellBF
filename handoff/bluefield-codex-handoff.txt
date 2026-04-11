@@ -1,0 +1,96 @@
+Project Aegis / OpenShellBF
+BlueField Investigation Handoff
+
+Repo context:
+- Workspace root: the repository root where these docs were unpacked or cloned
+- Source-of-truth spec:
+  - docs/unified-spec.md
+  - docs/prd.md
+  - docs/design-spec.md
+  - docs/implementation-plan.md
+- Proto contracts:
+  - proto/compiled_policy.proto
+  - proto/audit_event.proto
+  - proto/sandbox_binding.proto
+- Shared status file:
+  - STATUS.md
+
+Important context:
+- We are pursuing a microVM-first MVP.
+- Upstream OpenShell already has an experimental libkrun-based microVM runtime (`openshell-vm`).
+- The missing piece is the BlueField SR-IOV protected-egress path.
+- Target model:
+  - eth0 = management / bootstrap path
+  - eth1 = protected egress path through the BlueField DPU
+- DPU side target capabilities:
+  - compiled policy
+  - direct allow/deny vs managed_proxy
+  - TTL-based fail-closed
+  - DPU-side audit
+- Do not overclaim. Verify facts before making trust-boundary claims.
+
+Your mission:
+Determine whether this machine and BlueField setup can support the first proof slice:
+1. one microVM
+2. two NICs
+3. one protected-egress path through the DPU
+4. observable DPU-side enforcement point
+
+Working agreement:
+- Keep `STATUS.md` up to date as you work.
+- Add a short dated log entry whenever you verify a hardware fact, hit a blocker, or choose a next step.
+- If you create code or docs, mention the changed file paths in `STATUS.md`.
+- Keep findings concrete and reversible.
+
+Tasks:
+
+1. Inspect current BlueField / host readiness
+- Identify PF PCI address, current SR-IOV capability, current VF count, and eswitch mode.
+- Identify representors / ports visible on the host and/or DPU side.
+- Check IOMMU / VFIO readiness.
+- Confirm whether the host can safely create at least one VF for experiments.
+
+2. Inspect OpenShell microVM implementation
+- Review upstream openshell-vm / libkrun integration and determine where a second NIC could be added.
+- Determine whether the current runtime supports only gvproxy / virtio-net, or whether a second Linux/KVM NIC path is feasible.
+- Find the exact code locations where a second NIC attachment would need to be implemented.
+
+3. Determine viable attachment options for protected egress
+- Best case: direct VF-backed attachment into the microVM.
+- If that is not possible, identify the next-best DPU-owned / DPU-visible path.
+- Be explicit about what is proven, what is likely, and what is blocked.
+
+4. Try to prove or disprove the first slice
+- Can we get a microVM running with:
+  - one control NIC
+  - one second NIC intended for protected egress
+- Can traffic from that second NIC be observed at a BlueField-controlled ingress point such as a representor / OVS path?
+- If not, isolate the blocker precisely.
+
+5. Produce a concrete recommendation
+Return:
+- a short summary of findings
+- exact commands run
+- important outputs summarized
+- exact file paths that would need code changes
+- a recommended next implementation step
+- a risk list with hard blockers vs soft blockers
+- an updated `STATUS.md`
+
+Constraints:
+- Prefer fact-finding first.
+- Avoid destructive changes.
+- If changing networking state is necessary, keep it minimal and reversible.
+- Do not claim VF passthrough works unless you actually verified it.
+- If the right answer is "libkrun microVM is fine, but KubeVirt is cleaner for VF attachment," say so clearly.
+
+Specific questions to answer:
+- What is the current eswitch mode?
+- How many VFs are supported and currently enabled?
+- Are VF representors present and usable?
+- Is VFIO / IOMMU ready?
+- Can openshell-vm support a second NIC on Linux/KVM?
+- Can that second NIC realistically be tied to a BlueField SR-IOV / representor path?
+- What is the smallest end-to-end experiment we should run next?
+
+Deliver a practical engineering report, not just a brainstorm.

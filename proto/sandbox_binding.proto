@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package openshell.security.v1;
+
+import "google/protobuf/timestamp.proto";
+
+enum SandboxLifecycleState {
+  SANDBOX_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  SANDBOX_LIFECYCLE_STATE_PENDING = 1;
+  SANDBOX_LIFECYCLE_STATE_RUNNING = 2;
+  SANDBOX_LIFECYCLE_STATE_STOPPED = 3;
+  SANDBOX_LIFECYCLE_STATE_FAILED = 4;
+}
+
+message SandboxBinding {
+  string sandbox_id = 1;
+  string vf_id = 2;
+  string node_id = 3;
+  SandboxLifecycleState lifecycle_state = 4;
+  string active_policy_revision = 5;
+  google.protobuf.Timestamp bound_at = 6;
+}

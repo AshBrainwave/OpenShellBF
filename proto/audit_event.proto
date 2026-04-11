@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package openshell.security.v1;
+
+import "google/protobuf/timestamp.proto";
+
+enum AuditEventType {
+  AUDIT_EVENT_TYPE_UNSPECIFIED = 0;
+  AUDIT_EVENT_TYPE_ALLOW = 1;
+  AUDIT_EVENT_TYPE_DENY = 2;
+  AUDIT_EVENT_TYPE_POLICY_SYNC = 3;
+  AUDIT_EVENT_TYPE_POLICY_SYNC_FAILURE = 4;
+  AUDIT_EVENT_TYPE_SECRET_ROTATION = 5;
+  AUDIT_EVENT_TYPE_PROTECTION_STATE_CHANGE = 6;
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW = 1;
+  DECISION_DENY = 2;
+  DECISION_DEGRADED = 3;
+  DECISION_FAIL_CLOSED = 4;
+}
+
+enum ProtectionState {
+  PROTECTION_STATE_UNSPECIFIED = 0;
+  PROTECTION_STATE_UNPROTECTED = 1;
+  PROTECTION_STATE_PROTECTED = 2;
+  PROTECTION_STATE_DEGRADED = 3;
+  PROTECTION_STATE_FAIL_CLOSED = 4;
+}
+
+message AuditEvent {
+  string event_id = 1;
+  google.protobuf.Timestamp observed_at = 2;
+  AuditEventType event_type = 3;
+  string sandbox_id = 4;
+  string vf_id = 5;
+  Decision decision = 6;
+  string destination_host = 7;
+  string destination_ip = 8;
+  uint32 destination_port = 9;
+  string policy_rule_id = 10;
+  string policy_revision = 11;
+  string mode = 12;
+  string reason = 13;
+  uint64 bytes_sent = 14;
+  uint64 bytes_received = 15;
+  ProtectionState protection_state = 16;
+  map<string, string> attributes = 17;
+}
