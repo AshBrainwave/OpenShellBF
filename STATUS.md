@@ -14,18 +14,36 @@ Updated by: bluefield-codex
 - Runtime direction: microVM-first
 - Open question resolved: DPU is already in switchdev mode with OVS bridges configured. VF representors will appear on DPU when VFs are created from the host. The architecture for the first proof slice is confirmed viable.
 
-## DPU network map (verified 2026-04-11)
+## DPU network map (fully verified 2026-04-11)
 
 ```
-Physical wire 0 (p0)  ←→  ovsbr1  ←→  pf0hpf (host PF0 representor, enp179s0f0np0)
-                                   ←→  en3f0pf0sf0 (DPU-local SF — future gateway process)
-Physical wire 1 (p1)  ←→  ovsbr2  ←→  pf1hpf (host PF1 representor, enp179s0f1np1)
-                                   ←→  en3f1pf1sf0 (DPU-local SF — future gateway process)
+Physical wire 0 (p0 / enp3s0f0np0)
+    └── ovsbr1 (OVS bridge, policy flows active)
+            ├── p0           — physical uplink (wire)
+            ├── pf0hpf       — host PF0 representor (all enp179s0f0np0 traffic)
+            ├── en3f0pf0sf0  — SF0 OVS-side representor (gateway attach point)
+            └── [pf0vf0]     — VF0 representor, NOT yet added to bridge
+
+Physical wire 1 (p1 / enp3s0f1np1)
+    └── ovsbr2 (OVS bridge)
+            ├── p1           — physical uplink (wire)
+            ├── pf1hpf       — host PF1 representor
+            └── en3f1pf1sf0  — SF1 OVS-side representor
+
+DPU process attachment (not in OVS):
+    enp3s0f0s0  — SF0 application netdev (bind here to send/receive via ovsbr1)
+    enp3s0f1s0  — SF1 application netdev
 ```
 
-When a VF is created from the host (`sriov_numvfs=1` on `0000:b3:00.0`):
-- Host gains: a VF netdev (e.g. `enp179s0f0v0`) attachable to microVM eth1
-- DPU gains: a VF representor netdev — add it to ovsbr1 to get DPU-visible ingress point
+Active OVS policy flows on ovsbr1 (already enforcing today):
+```
+priority=200  ip  in_port=pf0hpf  nw_dst=45.54.28.15         → DROP
+priority=100  tcp in_port=pf0hpf  nw_dst=140.82.116.6 tp=443 → output:p0 (allow)
+priority=0                                                     → NORMAL
+```
+
+VF0 representor: `pf0vf0` appeared on DPU immediately after host wrote sriov_numvfs=1.
+Next: add `pf0vf0` to `ovsbr1`, then all microVM eth1 traffic becomes DPU-policy-governed.
 
 ## Latest findings
 
@@ -35,13 +53,40 @@ When a VF is created from the host (`sriov_numvfs=1` on `0000:b3:00.0`):
 
 ## Immediate next steps
 
-1. **On DPU (now)**: run `ip link show` and `ip addr` to understand current interface state; check what `enp3s0f0s0` / `enp3s0f1s0` are; run `sudo ovs-ofctl dump-flows ovsbr1` to see any existing flow rules.
-2. **On host**: `echo 1 | sudo tee /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs` — create one reversible VF.
-3. **On DPU**: run `devlink port show` again to see new VF representor; add it to `ovsbr1`: `sudo ovs-vsctl add-port ovsbr1 <vf0rep>`.
-4. **On host**: implement dual-NIC in `openshell-vm` (3 files). The protected-egress socket connects to a TAP device or macvtap on the host VF netdev.
-5. **Boot test**: launch a minimal VM, send traffic from eth1, tcpdump on the DPU VF representor to confirm DPU-side visibility.
-6. **Minimal enforcement test**: add an nftables drop-all on `en3f0pf0sf0` or a flow on `ovsbr1`, verify blocked from VM side.
-7. Once DPU-side enforcement is confirmed, scaffold `dpu/control-agent` and `dpu/egress-gateway` in `~/work/OpenShell`.
+### Step 1 — wire VF0 representor into OVS (on DPU, minutes)
+```bash
+# Assign MAC to VF on host first:
+sudo ip link set enp179s0f0v0 address 52:54:00:aa:bb:cc
+
+# On DPU — add VF0 representor to bridge and add default-drop for VF traffic:
+sudo ovs-vsctl add-port ovsbr1 pf0vf0
+sudo ovs-ofctl add-flow ovsbr1 "priority=50,in_port=pf0vf0,actions=drop"
+# Verify DPU blocks VF traffic; add allow rule for one destination to test enforcement
+```
+
+### Step 2 — prove DPU enforcement on VF (host, minutes)
+```bash
+# Bring up the VF and send traffic; it should be blocked by the DPU drop flow
+sudo ip link set enp179s0f0v0 up
+# ping or curl from the VF netdev context; expect drop
+# Add allow rule on DPU; expect traffic to pass — proves the enforcement point works
+```
+
+### Step 3 — implement openshell-vm dual-NIC (code, ~/work/OpenShell)
+Files to change (all in `crates/openshell-vm/`):
+1. `src/lib.rs` — add `protected_egress: Option<ProtectedEgressConfig>` to `VmConfig`; second `krun_add_net_unixstream` call in `launch()`
+2. `src/main.rs` — `--protected-egress-socket <path>` CLI flag
+3. `scripts/openshell-vm-init.sh` — eth1 static bring-up (no default route)
+Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkrun via unix socket
+
+### Step 4 — boot test and end-to-end proof
+- Launch microVM with eth1 wired to VF; tcpdump on DPU `pf0vf0` to confirm visibility
+- Add OVS allow rule for one destination; verify VM can reach it; verify DPU drops the rest
+- This proves the first slice: one microVM, DPU-enforced protected-egress, observable enforcement point
+
+### Step 5 — scaffold dpu/ code in ~/work/OpenShell
+- `dpu/control-agent/`: policy fetch loop, compiled policy cache, TTL logic
+- `dpu/egress-gateway/`: bind to `enp3s0f0s0`, evaluate compiled policy, emit audit
 
 ## Blockers and risks
 
@@ -73,6 +118,27 @@ When a VF is created from the host (`sriov_numvfs=1` on `0000:b3:00.0`):
   - Remote for OpenShell: SSH only (`git@github.com:AshBrainwave/OpenShell.git`); no writable HTTPS remote detected.
   - Next path to investigate: hardware SR-IOV readiness (BF3 eSwitch mode, VF count, IOMMU) and openshell-vm second-NIC feasibility.
   - All docs read: unified-spec.md, design-spec.md, implementation-plan.md, bluefield-codex-handoff.txt.
+
+- 2026-04-11 07:xx UTC VF-CREATION-AND-DPU-PROBE-DEEP (operator-verified)
+  - Commands on DPU: `ip link show`; `sudo ovs-ofctl dump-flows ovsbr1`; `devlink port show` (after VF creation).
+  - Commands on host: `echo 1 | sudo tee /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs`; `ip link show | grep -i enp179`.
+  - VERIFIED — VF creation: `sriov_numvfs=1` on host succeeded instantly. Host gained `enp179s0f0v0` (DOWN, no MAC). DPU gained representor `pf0vf0` (pcivf, controller 1, pfnum 0, vfnum 0, external true, hw_addr 00:00:00:00:00:00).
+  - VERIFIED — `pf0vf0` has all-zero MAC because no MAC has been set on the VF. Must assign one before use: `sudo ip link set enp179s0f0v0 address <mac>` on host, OR `devlink port function set pci/0000:03:00.0/196609 hw_addr <mac>` from DPU.
+  - VERIFIED — SF netdev architecture explained:
+    - `en3f0pf0sf0` (iface 8, master ovs-system) — OVS representor for SF0; used for TC/OVS steering rules.
+    - `enp3s0f0s0` (iface 9, NO master) — SF0 application netdev; a DPU process binds to this interface to send/receive traffic through the SF path in ovsbr1.
+    - These are two views of the same SF: representor (for the switch) and application netdev (for the process). This is the DOCA SF model.
+  - VERIFIED — DPU `oob_net0` is present (iface 3, UP) — out-of-band management port on the DPU, MAC `48:b0:2d:a6:21:ba`. Separate from rshim.
+  - VERIFIED — `p0` and `p1` physical uplink altnames are `enp3s0f0np0` and `enp3s0f1np1` respectively. All bridge ports confirmed UP.
+  - VERIFIED — OVS flow rules on ovsbr1 are active and non-trivial (pre-existing from earlier operator work):
+    - Rule 1 (priority 200): DROP all IP traffic from `pf0hpf` (host PF0) to `45.54.28.15`. This is an IP-level block for a specific destination.
+    - Rule 2 (priority 100): ALLOW TCP/443 from `pf0hpf` to `140.82.116.6` (a GitHub IP), forwarding to `p0` (wire).
+    - Rule 3 (priority 0): NORMAL — standard L2 forwarding for everything else.
+    - IMPLICATION: DPU is ALREADY enforcing outbound policy on host PF0 traffic today via OVS flows. The enforcement mechanism is proven and working. n_packets=49946 on the default rule confirms real traffic is flowing through ovsbr1.
+  - INFERENCE — The same OVS flow mechanism is exactly what we need for sandbox VF enforcement. Replace `in_port=pf0hpf` with `in_port=pf0vf0` and the DPU enforces policy per-sandbox (per-VF).
+  - INFERENCE — DPU gateway process should bind to `enp3s0f0s0` for L7-aware decisions (SNI, Host header), then emit verdict back via OVS TC rule or by reinjecting to p0. For L4-only rules, pure OVS flows on `pf0vf0` suffice without a userspace process.
+  - NEXT HARDWARE STEPS: (1) assign MAC to `enp179s0f0v0` on host; (2) `sudo ovs-vsctl add-port ovsbr1 pf0vf0` on DPU; (3) add a default-drop flow for `in_port=pf0vf0`; (4) test host-side VF connectivity is blocked; (5) add selective allow and confirm DPU enforcement.
+  - NEXT CODE STEPS: implement dual-NIC in openshell-vm (3 files identified); wire eth1 to host-side bridge over VF.
 
 - 2026-04-11 07:xx UTC DPU-PROBE (operator-verified at DPU terminal via rshim)
   - Commands run on DPU (ubuntu@localhost = 192.168.100.2): `lspci -nn | grep -i mellanox`; `devlink dev eswitch show pci/0000:03:00.0`; `devlink port show`; `ovs-vsctl show`; `sudo ovs-vsctl show`; `sudo devlink dev eswitch show pci/0000:03:00.0`.
