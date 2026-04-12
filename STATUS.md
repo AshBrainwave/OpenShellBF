@@ -1,13 +1,15 @@
 # OpenShellBF Status
 
-Last updated: 2026-04-11
-Updated by: bluefield-codex
+Last updated: 2026-04-12
+Updated by: operator + claude (session 3)
 Session 2 commit: e8f43b15 (OpenShell codex/bluefield-probe)
+Session 2 commit: f64c3479 (OpenShell codex/bluefield-probe, vf-bridge)
+Session 3: end-to-end validation (no new code commits — all testing)
 
 ## Current focus
 
-- Bootstrap a microVM-first MVP for OpenShell x BlueField-3.
-- Verify whether a BlueField-backed protected-egress path can be attached to `openshell-vm`.
+- Phase 2 COMPLETE: microVM dual-NIC with DPU-enforced protected egress is proven end-to-end.
+- Next: Phase 3 (guest routing) and Phase 4 (DPU control-agent with dynamic policy).
 
 ## Snapshot
 
@@ -109,6 +111,29 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
 - Prefer short dated entries below instead of rewriting history.
 
 ### Log
+
+- 2026-04-12 05:00–06:10 UTC SESSION 3 (operator + claude — end-to-end validation)
+  - GOAL: Step-by-step testing of all code produced in sessions 1–2.
+  - VERIFIED — VF and DPU state persisted across sessions. `sriov_numvfs=1`, `enp179s0f0v0` UP with MAC `52:54:00:aa:bb:cc`, `pf0vf0` in `ovsbr1` with drop flow active. Drop counter at 2674 packets (up from 1500 in session 2).
+  - VERIFIED — vf-bridge runtime works. `AF_PACKET` bound successfully to `tap-vftest` (TAP device test) and to `enp179s0f0v0` (real BF3 VF). Previous blocker (CAP_NET_RAW) resolved with sudo.
+  - VERIFIED — openshell-vm built with embedded runtime. Downloaded pre-built `libkrun.so`, `libkrunfw.so.5`, and `gvproxy` from GitHub release `vm-dev`, zstd-compressed, and rebuilt `openshell-vm` with `OPENSHELL_VM_RUNTIME_COMPRESSED_DIR`. Rootfs built with `build-rootfs.sh --base` (required `DOCKER_CONFIG` and `PATH` passthrough for sudo, and NGC auth for `nvcr.io`).
+  - VERIFIED — microVM boots with dual NICs. Console output shows `eth0` (gvproxy, MAC `5a:94:ef:e4:0c:ee`) and `eth1` (protected-egress, MAC `52:54:00:bf:00:01`). eth1 brought UP with `10.99.2.2/24` by init script. No default route on eth1 (correct).
+  - VERIFIED — vf-bridge packet relay works bidirectionally. Stats from one session: 96 frames guest→host (4408 B), 7 frames host→guest (2070 B). 42-byte frames are ARP from guest.
+  - VERIFIED — DPU sees VM eth1 traffic. `tcpdump -i pf0vf0` on DPU shows: `ARP, Request who-has 10.99.2.1 tell 10.99.2.2` (from guest eth1), DHCP requests, IPv6 multicast. Drop flow counter incremented from 2674 → 2786 → 2914 → 3144 across test iterations.
+  - PROVEN — DPU selective enforcement on VM traffic:
+    - Added `priority=100,udp,in_port=pf0vf0,nw_dst=8.8.8.8,actions=output:p0` on DPU.
+    - VM sent 5 UDP packets to 8.8.8.8 (allowed) and 5 to 1.1.1.1 (denied).
+    - DPU flow: `nw_dst=8.8.8.8` → `n_packets=5, n_bytes=292` (ALLOWED, forwarded to wire).
+    - DPU flow: `priority=50,in_port=pf0vf0,actions=drop` → counter incremented (1.1.1.1 packets DENIED).
+    - `tcpdump` confirmed: `10.99.2.2.37652 > 8.8.8.8.53` visible at pf0vf0, `10.99.2.2.33534 > 1.1.1.1.53` also visible but dropped by OVS.
+    - Required static ARP entries in guest (`ip neigh add ... lladdr 52:54:00:aa:bb:cc`) to resolve L2 addresses for external IPs without a gateway.
+  - ISSUES ENCOUNTERED:
+    - First VM boot failed with `ECONNREFUSED` on eth1 backend — stale UNIX socket from killed vf-bridge. Fix: always `rm -f` socket before starting vf-bridge.
+    - `openshell-vm exec` does not work with `--rootfs` flag — VM state file not written to expected path. Not a blocker (used init scripts + console log instead).
+    - SSH into VM not available (base rootfs has no sshd). Used `--exec` with test scripts and read console log.
+    - NGC auth failure when building rootfs — `sudo` doesn't inherit Docker credentials. Fix: `sudo DOCKER_CONFIG=/home/ubuntu/.docker`.
+    - DOCA CC compilation failure in sandbox supervisor build — not needed for dual-NIC test, rootfs usable without supervisor.
+  - STATUS: Phase 2 is COMPLETE and PROVEN. The first proof slice works: one microVM, DPU-enforced protected-egress, selective allow/deny, observable enforcement point.
 
 - 2026-04-11 19:18 UTC RESUME (agent session 2)
   - Commands: `ip link show enp179s0f0v0`; `cat /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs`; `ssh ubuntu@192.168.100.2 sudo ovs-vsctl show`; `ssh ubuntu@192.168.100.2 sudo ovs-ofctl dump-flows ovsbr1`; `ip addr show enp179s0f0v0`; `ssh ubuntu@192.168.100.2 ip -s link show pf0vf0`.
