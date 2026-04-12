@@ -134,6 +134,8 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
     - NGC auth failure when building rootfs — `sudo` doesn't inherit Docker credentials. Fix: `sudo DOCKER_CONFIG=/home/ubuntu/.docker`.
     - DOCA CC compilation failure in sandbox supervisor build — not needed for dual-NIC test, rootfs usable without supervisor.
   - STATUS: Phase 2 is COMPLETE and PROVEN. The first proof slice works: one microVM, DPU-enforced protected-egress, selective allow/deny, observable enforcement point.
+  - BLOCKER FOUND — full OpenShell gateway (k3s + sandboxes) cannot start: VM kernel lacks `CONFIG_POSIX_MQUEUE`. runc needs mqueue mount at `/dev/mqueue` for container init. This affects both custom and pre-built release binaries. Fix committed to `openshell.kconfig` (commit `832994c3`) but requires libkrunfw kernel rebuild.
+  - ALSO FOUND — gvproxy crashes after ~90s when k3s pods fail repeatedly. Root cause: VM kernel mqueue → runc fails → no pods → gvproxy socket EOF.
 
 - 2026-04-11 19:18 UTC RESUME (agent session 2)
   - Commands: `ip link show enp179s0f0v0`; `cat /sys/bus/pci/devices/0000:b3:00.0/sriov_numvfs`; `ssh ubuntu@192.168.100.2 sudo ovs-vsctl show`; `ssh ubuntu@192.168.100.2 sudo ovs-ofctl dump-flows ovsbr1`; `ip addr show enp179s0f0v0`; `ssh ubuntu@192.168.100.2 ip -s link show pf0vf0`.
