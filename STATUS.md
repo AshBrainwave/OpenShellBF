@@ -1,15 +1,17 @@
 # OpenShellBF Status
 
 Last updated: 2026-04-12
-Updated by: operator + claude (session 3)
+Updated by: operator + claude (session 4)
 Session 2 commit: e8f43b15 (OpenShell codex/bluefield-probe)
 Session 2 commit: f64c3479 (OpenShell codex/bluefield-probe, vf-bridge)
 Session 3: end-to-end validation (no new code commits — all testing)
+Session 4: kernel rebuild (CONFIG_POSIX_MQUEUE), full gateway boot achieved
 
 ## Current focus
 
-- Phase 2 COMPLETE: microVM dual-NIC with DPU-enforced protected egress is proven end-to-end.
-- Next: Phase 3 (guest routing) and Phase 4 (DPU control-agent with dynamic policy).
+- **FULL GATEWAY BOOT ACHIEVED**: openshell-vm boots k3s, all pods running, gateway gRPC healthy on port 30051.
+- Phase 2 COMPLETE: microVM dual-NIC with DPU-enforced protected egress proven.
+- Next: create a sandbox against the running gateway, then wire dual-NIC + DPU enforcement for sandbox traffic.
 
 ## Snapshot
 
@@ -111,6 +113,22 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
 - Prefer short dated entries below instead of rewriting history.
 
 ### Log
+
+- 2026-04-12 07:00–08:20 UTC SESSION 4 (operator + claude — kernel rebuild + full gateway boot)
+  - GOAL: Rebuild libkrunfw with CONFIG_POSIX_MQUEUE=y and achieve full gateway boot.
+  - KERNEL REBUILD — Built libkrunfw from source using `tasks/scripts/vm/build-libkrun.sh`. Pinned to commit `463f717bbdd916e1352a025b6fb2456e882b0b39`. Three-phase build: kernel source prep → merge openshell.kconfig fragment → full kernel + libkrunfw.so.5 (21MB) + libkrun.so (6.4MB). Verified `CONFIG_POSIX_MQUEUE=y` in the built `.config`.
+  - RUNTIME REPACK — Ran `compress-vm-runtime.sh` producing 19MB compressed artifacts (libkrunfw.so.5.zst, libkrun.so.zst, gvproxy.zst). Downloaded gvproxy v0.8.8 for linux-amd64.
+  - BINARY REBUILD — `OPENSHELL_VM_RUNTIME_COMPRESSED_DIR=target/vm-runtime-compressed cargo build -p openshell-vm`. Embedded: libkrun.so.zst (2.0MB), libkrunfw.so.5.zst (6.5MB), gvproxy.zst (3.9MB). Rootfs not embedded (built separately).
+  - MQUEUE FIX CONFIRMED — First boot showed zero mqueue errors. All k3s pods (coredns, agent-sandbox-controller, local-path-provisioner, helm-install-openshell, openshell-0) reached Running state. This was the blocker from session 3.
+  - HEALTH CHECK TIMEOUT — Original 90s timeout too short (openshell-0 started at T+53s, gateway needs ~40s more to init). Increased to 180s in `health.rs`.
+  - STALE KUBELET STATE BUG — Found and fixed: `/var/lib/kubelet/pods` lives on virtio-fs rootfs (not state disk). When state disk is reformatted, stale kubelet pod dirs cause cascading mkdir failures. Added cleanup to `openshell-vm-init.sh`: `rm -rf /var/lib/kubelet/pods /var/log/pods /var/log/containers`.
+  - STALE MTLS CERTS BUG — Found and fixed: `is_warm_boot()` found stale mTLS certs under `/root/.config/openshell/gateways/openshell-vm-default/` from a previous boot. New PKI generated on state disk didn't match. Fix: delete stale gateway config before cold boot.
+  - FULL GATEWAY BOOT — `Gateway healthy [48.2s]`, `Ready [54.4s total]`. All pods running, gRPC health check passed with proper mTLS.
+  - BUILD NOTES: `libclang-dev` needed for libkrun build (clang-sys crate). Set `LIBCLANG_PATH=/usr/lib/llvm-18/lib` if auto-detection fails.
+  - FILES CHANGED:
+    - `crates/openshell-vm/src/health.rs` — timeout 90s → 180s
+    - `rootfs/srv/openshell-vm-init.sh` — added kubelet state cleanup (runtime patch, not committed)
+  - STATUS: Full OpenShell gateway running in microVM. Ready for sandbox creation test.
 
 - 2026-04-12 05:00–06:10 UTC SESSION 3 (operator + claude — end-to-end validation)
   - GOAL: Step-by-step testing of all code produced in sessions 1–2.
