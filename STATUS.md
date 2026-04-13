@@ -1,17 +1,61 @@
 # OpenShellBF Status
 
-Last updated: 2026-04-12
-Updated by: operator + claude (session 4)
+Last updated: 2026-04-13
+Updated by: operator + claude (session 5)
 Session 2 commit: e8f43b15 (OpenShell codex/bluefield-probe)
 Session 2 commit: f64c3479 (OpenShell codex/bluefield-probe, vf-bridge)
 Session 3: end-to-end validation (no new code commits — all testing)
 Session 4: kernel rebuild (CONFIG_POSIX_MQUEUE), full gateway boot achieved
+Session 5: operational scripts, policies, E2E tests (8/8), exec access, packet lifecycle docs
 
 ## Current focus
 
-- **FULL GATEWAY BOOT ACHIEVED**: openshell-vm boots k3s, all pods running, gateway gRPC healthy on port 30051.
-- Phase 2 COMPLETE: microVM dual-NIC with DPU-enforced protected egress proven.
-- Next: create a sandbox against the running gateway, then wire dual-NIC + DPU enforcement for sandbox traffic.
+- **SANDBOX E2E TESTS PASSING (8/8)**: Four policy tiers verified — lockdown, web-readonly, api-allow, dpu-enforced.
+- Dual-NIC confirmed inside VM: eth0 (gvproxy, management) + eth1 (vf-bridge, protected egress) both UP.
+- Sandbox traffic currently exits via eth0 (gvproxy NAT). DPU enforcement path (eth1) requires policy routing.
+- Next: wire policy routing so sandbox pod egress (10.42.0.0/16) uses eth1 -> VF -> DPU OVS.
+
+## Session 5 deliverables (2026-04-13)
+
+### Operational scripts (`scripts/`)
+| Script | Purpose |
+|--------|---------|
+| `common.sh` | Shared constants, logging, helpers (kill_stale, tcp_probe, etc.) |
+| `start-vf-bridge.sh` | Creates SR-IOV VF, launches vf-bridge (AF_PACKET on host VF) |
+| `start-microvm.sh` | Clean boot of openshell-vm with cert sync + optional vf-bridge |
+| `create-sandbox.sh` | Policy-based sandbox creation (runs as ubuntu, verifies mTLS) |
+| `e2e-test.sh` | 8 automated tests across 4 policy tiers |
+
+### Sandbox policies (`policies/`)
+| Policy | What it enforces |
+|--------|-----------------|
+| `lockdown.yaml` | Zero network access — default deny blocks all outbound |
+| `web-readonly.yaml` | GET-only to PyPI/GitHub/npm, blocks POST, blocks non-listed hosts |
+| `api-allow.yaml` | L4 allow to Anthropic/OpenAI/HuggingFace APIs + PyPI for SDK installs |
+| `dpu-enforced.yaml` | Broad L4 allow (trust delegation) — DPU OVS does real enforcement |
+
+### E2E test results (8/8 PASS)
+```
+PASS  lockdown-curl          (curl blocked)
+PASS  lockdown-dns           (DNS resolution blocked)
+PASS  web-ro-pip-dryrun      (pip install --dry-run allowed)
+PASS  web-ro-post-blocked    (POST to pypi.org blocked)
+PASS  web-ro-other-blocked   (curl to httpbin.org blocked)
+PASS  api-anthropic-reachable (curl to api.anthropic.com succeeds)
+PASS  api-other-blocked      (curl to example.com blocked)
+PASS  dpu-pass-curl          (curl to api.anthropic.com via DPU-trust policy)
+```
+
+### Documentation (`docs/`)
+- `packet-lifecycle.md` — "A Day in the Life of a Packet" teaching guide
+- `packet-lifecycle.mmd` — Mermaid flowchart source
+- `packet-lifecycle.png` — Rendered Graphviz diagram (541 KB)
+- `render-diagram.py` — Graphviz DOT renderer script
+
+### Key findings
+- Binary path resolution: OPA checks resolved exe path via `/proc/PID/exe`. Sandbox uses uv-managed Python at `/sandbox/.uv/python/cpython-3.13.12-linux-x86_64-gnu/bin/python3.13`.
+- Cannot use iptables MARK in libkrun kernel (xt_MARK revision 2 fails). Policy routing with `ip rule` is the path forward.
+- VM exec works via vsock port 10777 (requires version symlink workaround for debug binary).
 
 ## Snapshot
 
