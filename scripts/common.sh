@@ -35,6 +35,11 @@ ROOTFS="${ROOTFS:-${INSTANCE_DIR}/rootfs}"
 GATEWAY_NAME="${GATEWAY_NAME:-openshell-vm-default}"
 GATEWAY_PORT="${GATEWAY_PORT:-30051}"
 
+# DPU access
+DPU_HOST="${DPU_HOST:-192.168.100.2}"
+DPU_USER="${DPU_USER:-ubuntu}"
+DPU_SSH_OPTS="${DPU_SSH_OPTS:--o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ControlMaster=auto -o ControlPersist=120 -o ControlPath=/tmp/openshellbf-dpu-%r@%h:%p}"
+
 # Logging
 LOG_DIR="${LOG_DIR:-/var/log/openshell}"
 

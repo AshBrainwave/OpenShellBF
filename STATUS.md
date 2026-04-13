@@ -414,6 +414,35 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
        - either prove SF escape can truly traverse Linux forwarding/NAT,
        - or replace it with a vendor-supported PF1-native CT/NAT path.
     4. Do not continue the older PF0/PF1 asymmetric NAT experiments.
+- 2026-04-13 23:35:10 UTC SESSION-7 PF1-DATAPATH-CONCLUSION
+  - Host-side automation added in `OpenShellBF`:
+    - `scripts/test-dpu-software-nat.sh`
+    - `scripts/run-dpu-software-nat-proof.sh`
+    - `scripts/test-dpu-veth-nat.sh`
+    - `scripts/run-dpu-veth-nat-proof.sh`
+    - `scripts/common.sh` updated with DPU SSH defaults and control-socket reuse
+  - VERIFIED — OVS CT/NAT is broken on this BF3 path even with hw-offload disabled:
+    - `table=0,ip,in_port=pf1vf0,actions=ct(table=1,nat)` increments on `ovsbr2`
+    - `table=1,ct_state=+new+trk,in_port=pf1vf0` remains `0`
+    - `table=1,priority=0,actions=drop` receives the test packets
+    - `tcpdump` shows SYNs on `pf1vf0`, nothing on `p1`
+    - Conclusion: this is not just a hardware-offload issue; the BF3/OVS recirculation CT path is non-functional for this VF path
+  - VERIFIED — DPU-side Linux veth escape path is L2/L3 viable:
+    - OVS forwards `pf1vf0 -> ovsnat0`
+    - Linux receives traffic on `hostnat0` (after aligning the gateway MAC to `02:00:00:00:00:01`)
+    - traffic is forwarded onward and becomes visible on both `enp3s0f1s0` and `p1`
+  - BLOCKED — Linux conntrack/NAT still does not engage on that BF3 egress path:
+    - `iptables -t raw PREROUTING` CT rule on `hostnat0` increments
+    - `iptables FORWARD` rule `hostnat0 -> enp3s0f1s0` increments
+    - `nft` `ctdebug` shows only the plain packet counter increments; `ct state new|established|untracked` all remain `0`
+    - `nft list chain ip nat POSTROUTING` shows all custom SNAT counters remain `0`
+    - `conntrack -L` shows no entries for `10.99.2.2` / `160.79.104.10`
+    - `tcpdump` on `enp3s0f1s0` and `p1` shows packets still leaving with source `10.99.2.2`
+  - CONCLUSION — Transparent DPU SNAT is not viable on this BF3 setup via either:
+    - OVS CT/NAT on `pf1vf0`
+    - Linux netfilter NAT after OVS handoff through `nat0`
+    - Linux netfilter NAT after OVS handoff through `ovsnat0 <-> hostnat0`
+  - RECOMMENDATION — Stop spending time on transparent NAT. The viable next design is a DPU-owned explicit egress proxy / gateway process (L4/L7) that the microVM sandbox reaches over `eth1`, while the DPU remains the enforcement and audit point.
 - 2026-04-11 SESSION-2 CODE-CHANGES (commit e8f43b15, branch codex/bluefield-probe)
   - Phase 2 scaffolding complete. All changes compile clean (`cargo check -p openshell-vm`; rustfmt passes).
   - `crates/openshell-vm/src/lib.rs`: Added `ProtectedEgressConfig { socket_path, mac }` struct. Added `protected_egress: Option<ProtectedEgressConfig>` to `VmConfig`. Initialized to `None` in `VmConfig::gateway()`. Added `krun_add_net_unixstream` call in `launch()` (Linux only; returns `VmError::HostSetup` on non-Linux). virtio-net features: CSUM, GUEST_CSUM, GUEST_TSO4, GUEST_UFO, HOST_TSO4, HOST_UFO.
