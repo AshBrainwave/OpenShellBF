@@ -1,0 +1,87 @@
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#1a1a2e', 'primaryTextColor': '#eee', 'primaryBorderColor': '#16213e', 'lineColor': '#e94560', 'secondaryColor': '#0f3460', 'tertiaryColor': '#533483', 'background': '#0a0a1a', 'mainBkg': '#1a1a2e', 'nodeBorder': '#e94560', 'clusterBkg': '#16213e', 'clusterBorder': '#0f3460', 'titleColor': '#eee', 'edgeLabelBackground': '#1a1a2e'}}}%%
+
+flowchart TB
+    subgraph SANDBOX["<b>SANDBOX POD</b> (inside microVM k3s)"]
+        direction TB
+        APP["<b>curl</b> https://api.anthropic.com<br/><i>User workload process</i>"]
+        PROXY_ENV["https_proxy=10.200.0.1:3128"]
+        CONNECT["CONNECT api.anthropic.com:443"]
+
+        subgraph OPA["<b>ENFORCEMENT POINT 1: OPA Policy Engine</b>"]
+            direction TB
+            EP_CHECK{"Endpoint match?<br/>api.anthropic.com:443<br/>in policy?"}
+            BIN_CHECK{"Binary match?<br/>/usr/bin/curl<br/>in policy?"}
+            DECISION{{"network_action"}}
+        end
+
+        TLS_MITM["<b>TLS Termination</b><br/>Proxy issues cert from<br/>OpenShell Sandbox CA<br/>Inspects HTTP request"]
+    end
+
+    subgraph MICROVM["<b>MICROVM KERNEL</b> (libkrun guest)"]
+        direction TB
+        POD_NET["Pod Network (cni0 bridge)<br/>10.200.0.0/24"]
+        ROUTING{"Kernel routing<br/>decision"}
+        ETH0["<b>eth0</b> (virtio-net)<br/>Management path<br/>192.168.127.2"]
+        ETH1["<b>eth1</b> (virtio-net)<br/>Protected egress<br/>10.99.2.2"]
+    end
+
+    subgraph HOST["<b>HOST</b> (x86_64, lenny1)"]
+        direction TB
+        GVPROXY["<b>gvproxy</b><br/>NAT gateway<br/>UNIX socket relay"]
+        VF_BRIDGE["<b>vf-bridge</b><br/>QEMU frame relay<br/>UNIX socket ↔ AF_PACKET"]
+        HOST_VF["<b>enp179s0f0v0</b><br/>SR-IOV VF<br/>MAC: 52:54:00:aa:bb:cc"]
+        HOST_NIC["<b>enp179s0f0np0</b><br/>Physical NIC (PF)"]
+    end
+
+    subgraph DPU["<b>BLUEFIELD-3 DPU</b> (ARM, 192.168.100.2)"]
+        direction TB
+        ESWITCH["<b>BF3 eSwitch</b><br/>Hardware packet steering<br/><i>Host cannot modify</i>"]
+
+        subgraph OVS["<b>ENFORCEMENT POINT 2: OVS Flow Table (ovsbr1)</b>"]
+            direction TB
+            PF0VF0["Port: <b>pf0vf0</b><br/>VF0 representor"]
+            FLOW_CHECK{"Flow table match?<br/>pri=100: allow X.X.X.X:443<br/>pri=50: DEFAULT DROP"}
+        end
+
+        P0["Port: <b>p0</b><br/>Physical uplink"]
+    end
+
+    WIRE["<b>Internet</b><br/>Datacenter wire"]
+
+    %% Flow: Application to Proxy
+    APP --> PROXY_ENV --> CONNECT --> EP_CHECK
+    EP_CHECK -->|YES| BIN_CHECK
+    EP_CHECK -->|NO| DENY_EP["403 Forbidden<br/><i>endpoint not in policy</i>"]
+    BIN_CHECK -->|YES| DECISION
+    BIN_CHECK -->|NO| DENY_BIN["403 Forbidden<br/><i>binary not allowed</i>"]
+    DECISION -->|allow| TLS_MITM
+
+    %% Flow: Proxy to VM kernel
+    TLS_MITM --> POD_NET --> ROUTING
+
+    %% Two paths
+    ROUTING -->|"default route<br/>(current)"| ETH0
+    ROUTING -->|"policy route<br/>(protected)"| ETH1
+
+    %% Management path
+    ETH0 --> GVPROXY --> HOST_NIC --> WIRE
+
+    %% Protected egress path
+    ETH1 --> VF_BRIDGE --> HOST_VF --> ESWITCH --> PF0VF0 --> FLOW_CHECK
+    FLOW_CHECK -->|ALLOW| P0 --> WIRE
+    FLOW_CHECK -->|DROP| DROPPED["Packet dropped<br/><i>Counter incremented</i><br/><i>Auditable via ovs-ofctl</i>"]
+
+    %% Styling
+    classDef enforce fill:#c62828,stroke:#ff5252,color:#fff,stroke-width:3px
+    classDef allow fill:#2e7d32,stroke:#66bb6a,color:#fff
+    classDef deny fill:#b71c1c,stroke:#ef5350,color:#fff
+    classDef hardware fill:#1565c0,stroke:#42a5f5,color:#fff,stroke-width:2px
+    classDef process fill:#4527a0,stroke:#7e57c2,color:#fff
+    classDef network fill:#00695c,stroke:#26a69a,color:#fff
+
+    class OPA,OVS enforce
+    class DECISION,FLOW_CHECK enforce
+    class DENY_EP,DENY_BIN,DROPPED deny
+    class TLS_MITM,GVPROXY,VF_BRIDGE process
+    class ESWITCH,HOST_VF,HOST_NIC,P0,PF0VF0 hardware
+    class POD_NET,ETH0,ETH1 network
