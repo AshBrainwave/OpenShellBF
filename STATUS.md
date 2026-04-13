@@ -443,6 +443,31 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
     - Linux netfilter NAT after OVS handoff through `nat0`
     - Linux netfilter NAT after OVS handoff through `ovsnat0 <-> hostnat0`
   - RECOMMENDATION — Stop spending time on transparent NAT. The viable next design is a DPU-owned explicit egress proxy / gateway process (L4/L7) that the microVM sandbox reaches over `eth1`, while the DPU remains the enforcement and audit point.
+- 2026-04-13 23:55:00 UTC SESSION-8 DOCA-NAT-PROXY-RESEARCH
+  - REVIEWED — NVIDIA DOCA NAT guide confirms the supported NAT path is a **DOCA Flow reference app on the DPU**, not OVS CT/NAT and not Linux netfilter NAT after punting to Arm Linux.
+  - REVIEWED — NAT guide execution requires:
+    - hugepages,
+    - SF-backed devices,
+    - mandatory `-a auxiliary:mlx5_core.sf.X,dv_flow_en=2` flags,
+    - and a **2-port-only** deployment model.
+  - REVIEWED — DOCA Flow switch-mode docs indicate representor-centric switching with a miss-to-software model, which is a much better architectural fit for a BF3 hybrid fast/slow path than more OVS/netfilter experiments.
+  - REVIEWED — `j3soon/bluefield-dpu-setup-notes` and its `examples/` tree. Practical takeaway:
+    - the repo is useful mainly as a **DOCA environment bring-up checklist**,
+    - especially host/DPU DOCA version alignment and running a simple DOCA sample before a more complex app,
+    - not as a ready-made NAT/proxy datapath design.
+  - REVIEWED — local OpenShell code already includes a real DPU proxy binary:
+    - `crates/openshell-sandbox/src/dpu_proxy.rs`
+    - `run_dpu_proxy(...)`
+    - `run_dpu_proxy_cc(...)`
+    - OPA, credential injection, inference routing, and OCSF audit are already present.
+  - SAVED — research note in `docs/doca-nat-proxy-hybrid-research.md`
+  - RECOMMENDATION — next implementation should explicitly split:
+    - `direct` mode → BF3-native DOCA NAT / DOCA Flow lane
+    - `managed_proxy` mode → explicit DPU proxy reusing `openshell-dpu-proxy`
+  - DO NOT RESUME:
+    - transparent OVS CT/NAT debugging on `pf1vf0`
+    - Linux netfilter SNAT debugging on `nat0`
+    - Linux netfilter SNAT debugging on `ovsnat0 <-> hostnat0`
 - 2026-04-11 SESSION-2 CODE-CHANGES (commit e8f43b15, branch codex/bluefield-probe)
   - Phase 2 scaffolding complete. All changes compile clean (`cargo check -p openshell-vm`; rustfmt passes).
   - `crates/openshell-vm/src/lib.rs`: Added `ProtectedEgressConfig { socket_path, mac }` struct. Added `protected_egress: Option<ProtectedEgressConfig>` to `VmConfig`. Initialized to `None` in `VmConfig::gateway()`. Added `krun_add_net_unixstream` call in `launch()` (Linux only; returns `VmError::HostSetup` on non-Linux). virtio-net features: CSUM, GUEST_CSUM, GUEST_TSO4, GUEST_UFO, HOST_TSO4, HOST_UFO.
