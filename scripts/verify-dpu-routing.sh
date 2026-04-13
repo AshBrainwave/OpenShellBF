@@ -105,6 +105,6 @@ else
     echo ""
     echo "Next: create a sandbox and verify DPU flow counters:"
     echo "  openshell sandbox create --policy policies/dpu-enforced.yaml --no-keep -- curl -s https://api.anthropic.com/v1/models"
-    echo "  ssh ubuntu@192.168.100.2 sudo ovs-ofctl dump-flows ovsbr1  # check pf0vf0 counters"
+    echo "  ssh ubuntu@192.168.100.2 sudo ovs-ofctl dump-flows ovsbr2  # check pf1vf0 counters"
     exit 0
 fi

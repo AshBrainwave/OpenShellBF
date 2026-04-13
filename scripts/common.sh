@@ -14,9 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
 
 # ── Paths — all overridable via environment ───────────────────────────────
 
-# BlueField-3 hardware
-PF_PCI="${PF_PCI:-0000:b3:00.0}"
-PF_DEV="${PF_DEV:-enp179s0f0np0}"
+# BlueField-3 hardware — PF1 for sandbox egress (wire-symmetric with SNAT IP 10.185.99.182)
+PF_PCI="${PF_PCI:-0000:b3:00.1}"
+PF_DEV="${PF_DEV:-enp179s0f1np1}"
 VF_MAC="${VF_MAC:-52:54:00:aa:bb:cc}"
 
 # Binaries
