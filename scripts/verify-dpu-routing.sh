@@ -54,10 +54,14 @@ echo -e "${CYAN}║   DPU Policy Routing Verification         ║${NC}"
 echo -e "${CYAN}╚═══════════════════════════════════════════╝${NC}"
 echo ""
 
-# 1. eth1 is up with correct IP
-check "eth1 interface is UP with 10.99.2.2" \
+# 1. eth1 is up with correct IP (checked as two grep patterns on multiline output)
+check "eth1 interface is UP" \
     "ip addr show eth1" \
-    "inet 10.99.2.2/24.*state UP"
+    "state UP"
+
+check "eth1 has IP 10.99.2.2/24" \
+    "ip addr show eth1" \
+    "inet 10.99.2.2/24"
 
 # 2. Static neighbor entry exists for virtual gateway
 check "static neighbor entry for 10.99.2.1" \
