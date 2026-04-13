@@ -49,6 +49,7 @@ BRIDGE="${BRIDGE:-ovsbr2}"
 VF_REP="${VF_REP:-pf1vf0}"
 UPLINK="${UPLINK:-p1}"
 HOST_REP="${HOST_REP:-pf1hpf}"
+SF_REP="${SF_REP:-en3f1pf1sf0}"
 DRY_RUN=false
 
 # ── Logging ─────────────────────────────────────────────────────────────
@@ -163,6 +164,11 @@ run "ovs-ofctl add-flow $BRIDGE 'table=0, priority=1000, arp, actions=normal'"
 
 # Host PF representor: pass through (management, SSH, etc.)
 run "ovs-ofctl add-flow $BRIDGE 'table=0, priority=900, in_port=$HOST_REP, actions=normal'"
+
+# SF representor: pass through (DPU's own traffic via enp3s0f1s0)
+run "ovs-ofctl add-flow $BRIDGE 'table=0, priority=900, in_port=$SF_REP, actions=normal'"
+
+# Local subnet from wire: pass through (DPU management, ARP replies, SSH)
 run "ovs-ofctl add-flow $BRIDGE 'table=0, priority=900, in_port=$UPLINK, ip, nw_dst=10.185.99.0/24, actions=normal'"
 
 # VF outbound: untracked IP → send to CT for tracking + NAT

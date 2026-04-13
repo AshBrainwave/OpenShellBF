@@ -373,6 +373,47 @@ Host wiring: TAP device bridged to `enp179s0f0v0` (host VF), connected to libkru
   - Code investigation and any code changes will happen in `/home/ubuntu/work/OpenShell`.
   - Next path to investigate after handshake publish: `/home/ubuntu/work/OpenShellBF/docs` and `/home/ubuntu/work/OpenShell/crates/openshell-vm`.
 - 2026-04-10: Initial project handoff created.
+- 2026-04-14 21:25:00 UTC SESSION-6 PF1-CT-NAT-DEBUG
+  - Goal: move the protected-egress path from PF0 to PF1 so NAT symmetry matches the already-routed DPU IP `10.185.99.182/24` on `enp3s0f1s0`.
+  - Host-side changes already committed before this note:
+    - `scripts/common.sh` defaults switched to PF1 (`0000:b3:00.1`, `enp179s0f1np1`).
+    - `scripts/start-vf-bridge.sh` now drives PF1 and host VF `enp179s0f1v0`.
+    - `scripts/setup-dpu-nat.sh` installs OVS CT/NAT flows on `ovsbr2` using `pf1vf0` -> `p1` with SNAT `10.185.99.182`.
+    - `docs/dpu-nat-design.md` updated for the PF1/ovsbr2 design.
+  - VERIFIED:
+    - Host PF1 VF exists: `enp179s0f1v0`.
+    - DPU representor exists: `pf1vf0` and is attached to `ovsbr2`.
+    - `vf-bridge` is bound to `enp179s0f1v0` and reaches `libkrun connected — bridge active` once the VM is started with `--with-vf-bridge`.
+    - Guest `eth1` appears only when the microVM is launched with `sudo ./scripts/start-microvm.sh --with-vf-bridge`.
+    - Guest routing can be re-applied successfully:
+      - `ip addr add 10.99.2.2/24 dev eth1`
+      - `ip rule add from 10.99.2.2 lookup 100 priority 99`
+      - `ip neigh replace 10.99.2.1 lladdr 02:00:00:00:00:01 dev eth1 nud permanent`
+      - `ip route add default via 10.99.2.1 dev eth1 table 100`
+      - Verified with `ip route get 160.79.104.10 from 10.99.2.2` => `via 10.99.2.1 dev eth1 table 100`
+    - Test-1 result: `ct(table=X)` recirculation on `pf1vf0` still fails silently on BF3/OVS 3.3.0040. Packets are seen on `pf1vf0` only and never reach `p1` nor the next table.
+    - Test-3 result: SF escape path partially works. Packet path proven:
+      - `pf1vf0` receives SYN from `10.99.2.2`
+      - OVS forwards it to `en3f1pf1sf0`
+      - Linux receives it on `enp3s0f1s0`
+  - BLOCKED:
+    - SF escape path still does not NAT/forward. On `enp3s0f1s0`, repeated SYNs from `10.99.2.2` are visible, but:
+      - no SNAT to `10.185.99.182` occurs,
+      - iptables/nftables NAT counters remain at `0`,
+      - no successful outbound TCP connect completes.
+    - Strong inference: packets are entering the Linux side of the PF1 SF pair but not traversing the expected forwarding/NAT path; further ad-hoc debugging should stop until the BlueField architecture is validated against vendor guidance.
+  - Artifacts added this session:
+    - `docs/dpu-ct-debug-prompt.md` — focused prompt documenting why `ct(table=X)` and `ct(commit,nat(...))` are failing on BF3 VF representors.
+    - `scripts/setup-dpu-nat.sh` improved to include SF representor pass-through on `ovsbr2`.
+  - Resume point for next session:
+    1. Start from the known-good host setup:
+       - `sudo ./scripts/start-vf-bridge.sh`
+       - `sudo ./scripts/start-microvm.sh --with-vf-bridge`
+    2. Re-verify guest `eth1` exists and routing points `10.99.2.2` traffic to `eth1`.
+    3. Continue only with a design-backed PF1 solution:
+       - either prove SF escape can truly traverse Linux forwarding/NAT,
+       - or replace it with a vendor-supported PF1-native CT/NAT path.
+    4. Do not continue the older PF0/PF1 asymmetric NAT experiments.
 - 2026-04-11 SESSION-2 CODE-CHANGES (commit e8f43b15, branch codex/bluefield-probe)
   - Phase 2 scaffolding complete. All changes compile clean (`cargo check -p openshell-vm`; rustfmt passes).
   - `crates/openshell-vm/src/lib.rs`: Added `ProtectedEgressConfig { socket_path, mac }` struct. Added `protected_egress: Option<ProtectedEgressConfig>` to `VmConfig`. Initialized to `None` in `VmConfig::gateway()`. Added `krun_add_net_unixstream` call in `launch()` (Linux only; returns `VmError::HostSetup` on non-Linux). virtio-net features: CSUM, GUEST_CSUM, GUEST_TSO4, GUEST_UFO, HOST_TSO4, HOST_UFO.
