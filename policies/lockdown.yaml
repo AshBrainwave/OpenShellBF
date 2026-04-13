@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# lockdown.yaml — Zero network access policy.
+#
+# All outbound connections are blocked. The sandbox has filesystem access
+# only (read-only system paths + read-write /sandbox and /tmp).
+# Use for offline compute, data processing, or code analysis tasks
+# that must never exfiltrate data.
+
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /app
+    - /etc
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# No network_policies = all outbound connections blocked by default.
+# The sandbox proxy drops every CONNECT attempt.
