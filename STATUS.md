@@ -55,6 +55,9 @@ Supporting artifacts:
 2. Implement `openshell-dpu-agent` in `OpenShell`.
 3. Generate DPU-local runtime files for the existing TCP proxy.
 4. Add DPU-side service/container wiring after the agent compiles and writes correct state.
+5. Use host-side DPU wrappers for startup/teardown:
+   - `scripts/start-dpu-managed-proxy-mvp.sh`
+   - `scripts/stop-dpu-managed-proxy-mvp.sh`
 
 ## Session 5 deliverables (2026-04-13)
 
