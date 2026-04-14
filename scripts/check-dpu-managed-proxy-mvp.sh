@@ -72,9 +72,9 @@ echo
 
 echo "=== DPU process list ==="
 {
-    pgrep -a -x 'openshell-dpu-proxy' || true
-    pgrep -a -x 'openshell-dpu-agent' || true
-    pgrep -a -x 'opa' || true
+    pgrep -a -f '[o]penshell-dpu-proxy' || true
+    pgrep -a -f '[o]penshell-dpu-agent' || true
+    pgrep -a -f "[o]pa run --server --addr 127.0.0.1:8181" || true
 } | sort -u
 echo
 
