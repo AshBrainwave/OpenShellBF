@@ -71,7 +71,11 @@ ss -tlnp 2>/dev/null | grep -E "(:$PROXY_PORT\\b|127.0.0.1:8181\\b)" || true
 echo
 
 echo "=== DPU process list ==="
-pgrep -a -f 'openshell-dpu-proxy|openshell-dpu-agent|opa run --server' || true
+{
+    pgrep -a -x 'openshell-dpu-proxy' || true
+    pgrep -a -x 'openshell-dpu-agent' || true
+    pgrep -a -x 'opa' || true
+} | sort -u
 echo
 
 echo "=== DPU proxy TCP probe ==="

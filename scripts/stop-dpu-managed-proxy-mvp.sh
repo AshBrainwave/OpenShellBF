@@ -40,8 +40,8 @@ done
 
 REMOTE_SCRIPT='
 set -euo pipefail
-pkill -f "openshell-dpu-proxy" 2>/dev/null || true
-pkill -f "opa run --server --addr 127.0.0.1:8181" 2>/dev/null || true
+pkill -x "openshell-dpu-proxy" 2>/dev/null || true
+pkill -x "opa" 2>/dev/null || true
 echo "Stopped DPU managed-proxy MVP processes."
 '
 

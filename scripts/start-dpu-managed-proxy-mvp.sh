@@ -113,8 +113,8 @@ ip -o -4 addr show | grep -qw "$PROXY_BIND_IP" || {
 
 mkdir -p "$OUTPUT_DIR/opa" "$LOG_DIR_REMOTE"
 
-pkill -f 'openshell-dpu-proxy' 2>/dev/null || true
-pkill -f 'opa run --server --addr $OPA_ADDR' 2>/dev/null || true
+pkill -x 'openshell-dpu-proxy' 2>/dev/null || true
+pkill -x 'opa' 2>/dev/null || true
 
 export OPENSHELL_ENDPOINT='$OPENSHELL_ENDPOINT'
 export OPENSHELL_SANDBOX_ID='$SANDBOX_ID'
