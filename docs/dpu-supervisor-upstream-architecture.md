@@ -72,6 +72,129 @@ The supervisor is the correct integration point.
   - applies DPU-local policy and credentials
   - forwards to internet
 
+## DPU Control Plane
+
+`DPU control agent -> OpenShell server` means:
+
+- a normal outbound mTLS gRPC client connection
+- originated by the DPU itself
+- not Comm Channel
+- not host-mediated
+
+For the MVP, that control path should be:
+
+- `oob_net0` on the DPU
+- to the existing OpenShell gRPC server endpoint
+
+Concretely:
+
+```text
+DPU control agent -- mTLS gRPC over oob_net0 --> OpenShell server
+```
+
+If we later choose to avoid the separate OOB network, the alternative is a DPU-owned routed path on `P1`. That is an alternative design, not the default MVP.
+
+## Concrete BF3 Network Map
+
+### VM side
+
+- `eth0`
+  - VM management and normal OpenShell internal control traffic
+  - supervisor uplinks use this side today via the VM CNI bridge (`10.42.0.0/24`)
+- `eth1`
+  - VM protected lane toward the DPU
+  - `10.99.2.2/24`
+
+### Sandbox and supervisor namespaces
+
+- sandbox netns
+  - app-facing veth
+  - example IP: `10.200.0.2/24`
+- supervisor netns
+  - gateway-facing veth
+  - example IP: `10.200.0.1/24`
+  - uplink on VM-internal bridge
+  - example uplink IP: `10.42.0.x`
+
+### DPU `P0`: protected ingress from the VM
+
+- `ovsbr1`
+  - protected bridge on the DPU
+- `pf0vf0`
+  - representor for the host VF that backs VM `eth1`
+- `en3f0pf0sf0`
+  - SF0 representor on the DPU side
+- `enp3s0f0s0`
+  - SF0 app netdev
+  - DPU protected-side service IP: `10.99.2.1/24`
+  - `openshell-dpu-proxy` listens here on `10.99.2.1:3128`
+
+### DPU `P1`: external / uplink side
+
+- `ovsbr2`
+  - external/uplink bridge on the DPU
+- `en3f1pf1sf0`
+  - PF1/SF1 representor when using the SF-based egress lane
+- `enp3s0f1s0`
+  - PF1/SF1 app/uplink netdev used for DPU egress in the current experiments
+
+### DPU OOB control plane
+
+- `oob_net0`
+  - DPU admin and control-plane network
+  - example address observed on the system: `10.185.99.185/24`
+  - preferred interface for `DPU control agent -> OpenShell server`
+
+## Concrete Network Diagram
+
+```mermaid
+flowchart LR
+    subgraph Host["Host (Untrusted)"]
+        H["openshell-vm launcher"]
+    end
+
+    subgraph VM["OpenShell Gateway microVM"]
+        APP["Sandbox app"]
+        SBOX["Sandbox netns\nveth 10.200.0.2"]
+        SUP["Supervisor netns\ngateway 10.200.0.1"]
+        SUPE["Supervisor uplink\neth0 / 10.42.x.y"]
+        ROOT["VM root namespace"]
+        ETH0["eth0 mgmt"]
+        ETH1["eth1 protected\n10.99.2.2"]
+    end
+
+    subgraph DPU["BlueField DPU"]
+        OOB["oob_net0\n10.185.99.185/24"]
+
+        subgraph P0["P0 protected ingress"]
+            OVS1["ovsbr1"]
+            PF0VF0["pf0vf0"]
+            SF0REP["en3f0pf0sf0"]
+            SF0APP["enp3s0f0s0\n10.99.2.1"]
+            DPUPROXY["openshell-dpu-proxy\n10.99.2.1:3128"]
+        end
+
+        subgraph P1["P1 external / uplink"]
+            OVS2["ovsbr2"]
+            SF1REP["en3f1pf1sf0"]
+            SF1APP["enp3s0f1s0"]
+        end
+
+        CTRL["DPU control agent"]
+    end
+
+    OS["OpenShell server"]
+    NET["Internet / APIs"]
+
+    H --> VM
+    APP --> SBOX --> SUP --> SUPE --> ROOT
+    ROOT --> ETH1 --> PF0VF0 --> OVS1 --> SF0REP --> SF0APP --> DPUPROXY
+    DPUPROXY --> OVS2 --> SF1REP --> SF1APP --> NET
+
+    CTRL --> OOB --> OS
+    CTRL --> DPUPROXY
+```
+
 ## High-Level Component Diagram
 
 ```mermaid
@@ -97,8 +220,8 @@ flowchart LR
     end
 
     subgraph DPU["BlueField DPU"]
-        CTRL["DPU control agent"]
-        DPUPROXY["DPU proxy\n10.99.2.1:3128"]
+        CTRL["DPU control agent\nover oob_net0"]
+        DPUPROXY["DPU proxy\n10.99.2.1:3128 on enp3s0f0s0"]
         DIRECT["Future direct lane"]
     end
 
@@ -129,13 +252,14 @@ flowchart LR
     ROOT["VM root namespace"]
     ETH1["VM eth1\n10.99.2.2"]
     VF["Host VF / vf-bridge"]
-    REP["DPU VF representor"]
-    SF["DPU SF app netdev\n10.99.2.1"]
+    REP["DPU P0 representor\npf0vf0"]
+    SFREP["DPU SF0 representor\nen3f0pf0sf0"]
+    SF["DPU SF0 app netdev\nenp3s0f0s0 / 10.99.2.1"]
     DPUP["openshell-dpu-proxy"]
-    WAN["External API / Internet"]
+    WAN["P1 uplink / Internet"]
 
     APP --> VETHS --> GATE
-    GATE --> SUPE0 --> CNI --> ROOT --> ETH1 --> VF --> REP --> SF --> DPUP --> WAN
+    GATE --> SUPE0 --> CNI --> ROOT --> ETH1 --> VF --> REP --> SFREP --> SF --> DPUP --> WAN
 ```
 
 ## Request Path For `managed_proxy`
@@ -217,4 +341,3 @@ Concretely:
 2. add supervisor-netns routing to the DPU protected subnet
 3. authenticate supervisor -> DPU proxy per sandbox
 4. keep sandbox-side behavior unchanged
-
