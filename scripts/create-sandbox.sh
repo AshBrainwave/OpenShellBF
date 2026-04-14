@@ -37,6 +37,7 @@ FROM=""
 POLICY=""
 NO_KEEP=false
 KEEP=false
+ENV_VARS=()
 EXTRA_ARGS=()
 
 # ── Usage ─────────────────────────────────────────────────────────────────
@@ -50,6 +51,7 @@ Options:
   --name <name>       Sandbox name (auto-generated if omitted)
   --from <image>      Sandbox source image
   --policy <path>     Path to policy YAML (default: policies/web-readonly.yaml)
+  --env KEY=VALUE     Inject environment into the sandbox supervisor (repeatable)
   --keep              Keep the sandbox after the initial shell / command exits
   --no-keep           Delete sandbox when command exits
   --help              Show this help
@@ -57,6 +59,7 @@ Options:
 Examples:
   ./create-sandbox.sh --name dev
   ./create-sandbox.sh --policy ../policies/lockdown.yaml --name offline
+  ./create-sandbox.sh --env OPENSHELL_UPSTREAM_HTTP_PROXY=10.99.2.1:3128 --name dpu-proxy-demo
   ./create-sandbox.sh --no-keep -- curl -s https://example.com
 EOF
     exit 0
@@ -68,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --name)    NAME="$2";    shift 2 ;;
         --from)    FROM="$2";    shift 2 ;;
         --policy)  POLICY="$2";  shift 2 ;;
+        --env)     ENV_VARS+=("$2"); shift 2 ;;
         --keep)    KEEP=true;    shift ;;
         --no-keep) NO_KEEP=true; shift ;;
         --help)    usage ;;
@@ -113,6 +117,9 @@ CMD=("$OPENSHELL_CLI" sandbox create
 
 [[ -n "$NAME" ]] && CMD+=(--name "$NAME")
 [[ -n "$FROM" ]] && CMD+=(--from "$FROM")
+for env_var in "${ENV_VARS[@]}"; do
+    CMD+=(--env "$env_var")
+done
 $KEEP && CMD+=(--keep)
 $NO_KEEP && CMD+=(--no-keep)
 
