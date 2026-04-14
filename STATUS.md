@@ -7,6 +7,7 @@ Session 2 commit: f64c3479 (OpenShell codex/bluefield-probe, vf-bridge)
 Session 3: end-to-end validation (no new code commits — all testing)
 Session 4: kernel rebuild (CONFIG_POSIX_MQUEUE), full gateway boot achieved
 Session 5: operational scripts, policies, E2E tests (8/8), exec access, packet lifecycle docs
+Session 6: DPU managed-proxy MVP control plane + launch/debugging
 
 ## Current focus
 
@@ -15,6 +16,67 @@ Session 5: operational scripts, policies, E2E tests (8/8), exec access, packet l
 - **Policy semantics remain per sandbox**: the DPU runtime should preserve OpenShell's per-sandbox policy model even if process topology differs.
 - **Transparent NAT/CT work is closed**: OVS CT/NAT and Linux netfilter NAT on the BF3 protected path are treated as dead ends for this design.
 - **Next implementation slice**: DPU control agent that pulls sandbox policy and provider env from OpenShell over a DPU-owned path, compiles local OPA input, and feeds the existing `openshell-dpu-proxy` TCP mode.
+
+## 2026-04-14 DPU managed-proxy MVP progress
+
+### Saved code state
+
+- `OpenShell` clean worktree / branch: `dpu-managed-proxy-mvp`
+  - commit `6a089147` — add DPU control-agent MVP
+  - commit `01d8db6d` — stub comch when wrapper sources are absent
+  - commit `cbfb0e4a` — allow TLS server-name override for DPU agent
+- `OpenShellBF`
+  - commit `25bed96` — wire DPU managed-proxy MVP bringup
+  - commit `c33eb8b` — avoid self-matching DPU proxy wrappers
+  - commit `16105aa` — reliably stop stale DPU proxy listeners
+
+### What works
+
+- Host-side `openshell-vm` protected path remains the correct base:
+  - sandbox guest reaches `10.99.2.1:3128` over `eth1`
+  - DPU protected IP is on `enp3s0f0s0`
+  - OVS proxy steering flows exist on `ovsbr1`
+- DPU control plane now works:
+  - `openshell-dpu-agent --oneshot` succeeds against OpenShell gRPC
+  - per-sandbox runtime state is generated under `/home/ubuntu/openshell-dpu/<sandbox-id>/`
+  - current confirmed sandbox id:
+    - `1ad033b9-1532-42d5-b873-d5ddedda9b39`
+- TLS hostname mismatch to the gateway was addressed by adding:
+  - `OPENSHELL_TLS_SERVER_NAME`
+  - current working override: `localhost`
+- DPU OPA starts successfully on `127.0.0.1:8181`
+
+### Latest concrete blocker
+
+- `openshell-dpu-proxy` startup reached the bind step and failed with:
+  - `Address already in use (os error 98)`
+- Root cause narrowed to stale proxy listeners and wrapper lifecycle issues:
+  - earlier wrappers could self-match/kill or fail to clear old listeners
+  - wrappers were patched in `OpenShellBF`, but final validation after the stale-listener fix was not completed before session end
+
+### Resume checklist
+
+1. On `lenny1`, pull latest `OpenShellBF`.
+2. On the DPU, ensure `~/work/OpenShell` is on branch `dpu-managed-proxy-mvp` and includes commit `cbfb0e4a`.
+3. Rebuild on the DPU:
+   - `/home/ubuntu/.cargo/bin/cargo build --release -p openshell-sandbox --bin openshell-dpu-agent --bin openshell-dpu-proxy`
+4. Stop and restart the DPU proxy stack from `OpenShellBF` using:
+   - `--endpoint https://192.168.100.1:30051`
+   - `--tls-server-name localhost`
+5. Immediately inspect:
+   - `./scripts/check-dpu-managed-proxy-mvp.sh --host bf-dpu --sandbox-id 1ad033b9-1532-42d5-b873-d5ddedda9b39`
+6. If listener exists on `10.99.2.1:3128`, retest from sandbox:
+   - `unset https_proxy http_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY`
+   - `curl -skv --proxy http://10.99.2.1:3128 https://example.com/`
+
+### Important operator notes
+
+- Always use the correct gateway context when working with the sandbox:
+  - `openshell gateway select openshell-vm-default`
+- The DPU startup wrappers are host-side scripts and should be run from `lenny1`, not from the DPU shell.
+- The OpenShell main worktree still has an unrelated user dirty file:
+  - `crates/openshell-vm/src/health.rs`
+  - do not overwrite it; continue using the clean worktree at `/home/ubuntu/work/OpenShell-dpu-mvp`
 
 ## 2026-04-14 design reset and MVP
 
