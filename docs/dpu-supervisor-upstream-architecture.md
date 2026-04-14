@@ -272,6 +272,24 @@ flowchart LR
 6. The DPU proxy applies DPU-local policy, credentials, and audit.
 7. The DPU proxy forwards the request to the external destination.
 
+## MVP Configuration Knob
+
+The current implementation adds one explicit supervisor-side knob:
+
+```text
+OPENSHELL_UPSTREAM_HTTP_PROXY=10.99.2.1:3128
+```
+
+Meaning:
+
+- sandbox applications still use the local supervisor proxy at `10.200.0.1`
+- the supervisor proxy uses `10.99.2.1:3128` as its upstream HTTP proxy
+- the DPU proxy remains a shared service for the MVP
+
+This should be injected into the sandbox supervisor environment, for example
+through the sandbox template/spec environment map that already flows into the
+`openshell-sandbox` container.
+
 ## What Changes In Code
 
 ### Keep unchanged
