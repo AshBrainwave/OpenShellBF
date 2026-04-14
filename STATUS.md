@@ -1,7 +1,7 @@
 # OpenShellBF Status
 
-Last updated: 2026-04-13
-Updated by: operator + claude (session 5)
+Last updated: 2026-04-14
+Updated by: operator + codex
 Session 2 commit: e8f43b15 (OpenShell codex/bluefield-probe)
 Session 2 commit: f64c3479 (OpenShell codex/bluefield-probe, vf-bridge)
 Session 3: end-to-end validation (no new code commits — all testing)
@@ -10,10 +10,51 @@ Session 5: operational scripts, policies, E2E tests (8/8), exec access, packet l
 
 ## Current focus
 
-- **SANDBOX E2E TESTS PASSING (8/8)**: Four policy tiers verified — lockdown, web-readonly, api-allow, dpu-enforced.
-- Dual-NIC confirmed inside VM: eth0 (gvproxy, management) + eth1 (vf-bridge, protected egress) both UP.
-- Sandbox traffic currently exits via eth0 (gvproxy NAT). DPU enforcement path (eth1) requires policy routing.
-- Next: wire policy routing so sandbox pod egress (10.42.0.0/16) uses eth1 -> VF -> DPU OVS.
+- **REVISED BF3 MVP**: keep the host-side sandbox as `openshell-vm`, keep `eth1` as protected egress, and move first implementation effort to a guest-facing DPU proxy in TCP mode.
+- **Comm Channel deprioritized**: host is untrusted and should not act as the DPU control-plane transport. OOB or another DPU-owned path is the control plane; guest `eth1` is the protected data plane.
+- **Policy semantics remain per sandbox**: the DPU runtime should preserve OpenShell's per-sandbox policy model even if process topology differs.
+- **Transparent NAT/CT work is closed**: OVS CT/NAT and Linux netfilter NAT on the BF3 protected path are treated as dead ends for this design.
+- **Next implementation slice**: DPU control agent that pulls sandbox policy and provider env from OpenShell over a DPU-owned path, compiles local OPA input, and feeds the existing `openshell-dpu-proxy` TCP mode.
+
+## 2026-04-14 design reset and MVP
+
+### New target architecture
+
+- Host remains **untrusted** and does not push policy, secrets, or runtime control directly into DPU services.
+- Protected sandboxes keep a dedicated `eth1` path backed by a VF.
+- `managed_proxy` starts as a **per-sandbox DPU proxy isolation unit** (container first, DPU VM later if needed).
+- `direct` becomes a later **shared DPU-native lane**, likely DOCA Flow based.
+- DPU control plane is **DPU-owned**, with OOB as the current MVP assumption.
+
+Supporting artifacts:
+
+- `docs/dpu-vf-isolated-architecture.md`
+- `docs/vf-isolated-dpu-architecture.png`
+- `scripts/reset-dpu-pf1-experiments.sh`
+
+### MVP decisions
+
+1. Keep `openshell-vm` on the host; do **not** move the workload into a DPU VM.
+2. Start with `openshell-dpu-proxy --mode tcp` bound on the protected DPU-side IP (guest-facing).
+3. Do **not** use Comm Channel for the MVP.
+4. Land policy on the DPU via a new DPU control-agent that:
+   - pulls `GetSandboxConfig`
+   - pulls `GetSandboxProviderEnvironment`
+   - writes DPU-local OPA policy/data and credentials files
+   - reports policy load status back to OpenShell
+5. Treat `direct` mode as a later track after the managed proxy path works.
+
+### Network/admin state to preserve
+
+- `oob_net0` is healthy on the DPU, but PF1 currently has a lower-metric default route. If OOB-only control plane is required, normalize routing before more dataplane experiments.
+- PF1 NAT experiment cleanup script exists and restores a mostly clean baseline without touching PF0/`ovsbr1`.
+
+### Implementation order
+
+1. Save architecture and cleanup tooling in `OpenShellBF`.
+2. Implement `openshell-dpu-agent` in `OpenShell`.
+3. Generate DPU-local runtime files for the existing TCP proxy.
+4. Add DPU-side service/container wiring after the agent compiles and writes correct state.
 
 ## Session 5 deliverables (2026-04-13)
 
