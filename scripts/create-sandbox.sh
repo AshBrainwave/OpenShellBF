@@ -15,6 +15,7 @@
 #   --name <name>       Sandbox name (auto-generated if omitted)
 #   --from <image>      Sandbox source image
 #   --policy <path>     Path to policy YAML (default: policies/web-readonly.yaml)
+#   --keep              Keep the sandbox after the initial shell / command exits
 #   --no-keep           Delete sandbox when command exits
 #   --help              Show this help
 #
@@ -35,6 +36,7 @@ NAME=""
 FROM=""
 POLICY=""
 NO_KEEP=false
+KEEP=false
 EXTRA_ARGS=()
 
 # ── Usage ─────────────────────────────────────────────────────────────────
@@ -48,6 +50,7 @@ Options:
   --name <name>       Sandbox name (auto-generated if omitted)
   --from <image>      Sandbox source image
   --policy <path>     Path to policy YAML (default: policies/web-readonly.yaml)
+  --keep              Keep the sandbox after the initial shell / command exits
   --no-keep           Delete sandbox when command exits
   --help              Show this help
 
@@ -65,6 +68,7 @@ while [[ $# -gt 0 ]]; do
         --name)    NAME="$2";    shift 2 ;;
         --from)    FROM="$2";    shift 2 ;;
         --policy)  POLICY="$2";  shift 2 ;;
+        --keep)    KEEP=true;    shift ;;
         --no-keep) NO_KEEP=true; shift ;;
         --help)    usage ;;
         --)        shift; EXTRA_ARGS=("$@"); break ;;
@@ -109,6 +113,7 @@ CMD=("$OPENSHELL_CLI" sandbox create
 
 [[ -n "$NAME" ]] && CMD+=(--name "$NAME")
 [[ -n "$FROM" ]] && CMD+=(--from "$FROM")
+$KEEP && CMD+=(--keep)
 $NO_KEEP && CMD+=(--no-keep)
 
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then

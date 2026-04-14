@@ -26,6 +26,7 @@ LOG_DIR_REMOTE="${LOG_DIR_REMOTE:-}"
 TLS_CA="${TLS_CA:-}"
 TLS_CERT="${TLS_CERT:-}"
 TLS_KEY="${TLS_KEY:-}"
+TLS_SERVER_NAME="${TLS_SERVER_NAME:-}"
 
 usage() {
     cat <<'EOF'
@@ -49,6 +50,8 @@ Options:
   --tls-ca <path>      DPU-local CA cert path for gRPC mTLS
   --tls-cert <path>    DPU-local client cert path for gRPC mTLS
   --tls-key <path>     DPU-local client key path for gRPC mTLS
+  --tls-server-name <name>
+                      Optional TLS hostname/SNI override for gRPC
   --help               Show this help
 EOF
     exit 0
@@ -68,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --tls-ca)     TLS_CA="$2"; shift 2 ;;
         --tls-cert)   TLS_CERT="$2"; shift 2 ;;
         --tls-key)    TLS_KEY="$2"; shift 2 ;;
+        --tls-server-name) TLS_SERVER_NAME="$2"; shift 2 ;;
         --help)       usage ;;
         *)            die "Unknown option: $1" ;;
     esac
@@ -89,6 +93,8 @@ else
     BIN_DIR="$REMOTE_SOURCE/target/debug"
 fi
 
+PROXY_BIND_IP="${PROXY_LISTEN%:*}"
+
 REMOTE_SCRIPT=$(cat <<EOF
 set -euo pipefail
 
@@ -100,6 +106,10 @@ OPA_BIN="\$(command -v opa || true)"
 [[ -x "\$AGENT_BIN" ]] || { echo "openshell-dpu-agent not found at \$AGENT_BIN" >&2; exit 1; }
 [[ -x "\$PROXY_BIN" ]] || { echo "openshell-dpu-proxy not found at \$PROXY_BIN" >&2; exit 1; }
 [[ -n "\$OPA_BIN" ]] || { echo "opa binary not found on DPU PATH" >&2; exit 1; }
+ip -o -4 addr show | grep -qw "$PROXY_BIND_IP" || {
+    echo "DPU listen IP $PROXY_BIND_IP is not configured locally. Bring up the protected DPU IP before starting the proxy." >&2
+    exit 1
+}
 
 mkdir -p "$OUTPUT_DIR/opa" "$LOG_DIR_REMOTE"
 
@@ -121,10 +131,14 @@ fi
 if [[ -n "$TLS_KEY" ]]; then
     REMOTE_SCRIPT+=$'\n'"export OPENSHELL_TLS_KEY='$TLS_KEY'"
 fi
+if [[ -n "$TLS_SERVER_NAME" ]]; then
+    REMOTE_SCRIPT+=$'\n'"export OPENSHELL_TLS_SERVER_NAME='$TLS_SERVER_NAME'"
+fi
 
 REMOTE_SCRIPT+=$(cat <<EOF
 
-"\$AGENT_BIN" --oneshot --openshell-endpoint "$OPENSHELL_ENDPOINT" --sandbox-id "$SANDBOX_ID" --output-dir "$OUTPUT_DIR"
+"\$AGENT_BIN" --oneshot --openshell-endpoint "$OPENSHELL_ENDPOINT" --sandbox-id "$SANDBOX_ID" --output-dir "$OUTPUT_DIR" \
+    2>&1 | tee "$LOG_DIR_REMOTE/dpu-agent-$SANDBOX_ID.log"
 
 nohup "\$OPA_BIN" run --server --addr "$OPA_ADDR" \
     "$OUTPUT_DIR/opa/policy.rego" "$OUTPUT_DIR/opa/data.json" \
@@ -161,6 +175,7 @@ echo "sandbox_id: $SANDBOX_ID"
 echo "output_dir: $OUTPUT_DIR"
 echo "proxy_listen: $PROXY_LISTEN"
 echo "opa_addr: $OPA_ADDR"
+echo "agent_log: $LOG_DIR_REMOTE/dpu-agent-$SANDBOX_ID.log"
 echo "opa_log: $LOG_DIR_REMOTE/opa-$SANDBOX_ID.log"
 echo "proxy_log: $LOG_DIR_REMOTE/dpu-proxy-$SANDBOX_ID.log"
 echo "ca_cert: $OUTPUT_DIR/openshell-dpu-ca.crt"
@@ -182,5 +197,6 @@ log "  export HTTPS_PROXY=http://$PROXY_LISTEN"
 log "  curl -v --proxy http://$PROXY_LISTEN https://example.com/"
 echo ""
 log "DPU logs:"
+log "  ssh $DPU_SSH_TARGET 'tail -f $LOG_DIR_REMOTE/dpu-agent-$SANDBOX_ID.log'"
 log "  ssh $DPU_SSH_TARGET 'tail -f $LOG_DIR_REMOTE/opa-$SANDBOX_ID.log'"
 log "  ssh $DPU_SSH_TARGET 'tail -f $LOG_DIR_REMOTE/dpu-proxy-$SANDBOX_ID.log'"

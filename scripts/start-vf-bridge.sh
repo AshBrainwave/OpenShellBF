@@ -4,9 +4,10 @@
 #
 # start-vf-bridge.sh
 #
-# Creates an SR-IOV VF on the BlueField-3 PF (if needed), then launches
-# vf-bridge in the background to relay Ethernet frames between the VF
-# and a UNIX stream socket consumed by libkrun (guest eth1).
+# Creates an SR-IOV VF on the BlueField-3 protected PF (PF0 for the
+# managed-proxy MVP), then launches vf-bridge in the background to relay
+# Ethernet frames between the VF and a UNIX stream socket consumed by libkrun
+# (guest eth1).
 #
 # Usage:
 #   sudo ./start-vf-bridge.sh [OPTIONS]
@@ -22,13 +23,13 @@
 # Prerequisites:
 #   - SR-IOV enabled in BIOS and kernel (iommu=pt intel_iommu=on)
 #   - vfio, vfio_pci modules loaded
-#   - DPU in switchdev mode with pf1vf0 wired into ovsbr2
+#   - DPU in switchdev mode with pf0vf0 wired into ovsbr1
 #   - vf-bridge binary built (target/debug/vf-bridge or target/release/vf-bridge)
 #
 # After running this script, verify DPU side via rshim SSH:
 #   ssh ubuntu@192.168.100.2
-#   sudo ovs-vsctl show              # pf1vf0 should be in ovsbr2
-#   sudo ovs-ofctl dump-flows ovsbr2 # check CT/NAT rules on pf1vf0
+#   sudo ovs-vsctl show              # pf0vf0 should be in ovsbr1
+#   sudo ovs-ofctl dump-flows ovsbr1 # check policy rules on pf0vf0
 
 set -euo pipefail
 
@@ -45,11 +46,11 @@ usage() {
     cat <<'EOF'
 Usage: sudo ./start-vf-bridge.sh [OPTIONS]
 
-Creates SR-IOV VF on BF3 PF and launches vf-bridge.
+Creates SR-IOV VF on the protected BF3 PF and launches vf-bridge.
 
 Options:
-  --pf <dev>       Host PF netdev             (default: enp179s0f1np1)
-  --pci <addr>     PCI address of the BF3 PF  (default: 0000:b3:00.1)
+  --pf <dev>       Host PF netdev             (default: enp179s0f0np0)
+  --pci <addr>     PCI address of the BF3 PF  (default: 0000:b3:00.0)
   --socket <path>  UNIX socket for vf-bridge  (default: /run/openshell/vf-bridge/eth1.sock)
   --skip-vf        Skip VF creation (VF already exists)
   --foreground     Run vf-bridge in foreground
@@ -163,7 +164,7 @@ log "  Log:        $LOG_DIR/vf-bridge.log"
 echo ""
 log "=== DPU verification (via rshim SSH) ==="
 log "  ssh ubuntu@192.168.100.2"
-log "    sudo ovs-vsctl show              # pf1vf0 should be in ovsbr2"
-log "    sudo ovs-ofctl dump-flows ovsbr2  # check CT/NAT rules on pf1vf0"
+log "    sudo ovs-vsctl show              # pf0vf0 should be in ovsbr1"
+log "    sudo ovs-ofctl dump-flows ovsbr1 # check policy rules on pf0vf0"
 echo ""
 log "Next: sudo ./start-microvm.sh --with-vf-bridge"

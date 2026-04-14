@@ -4,8 +4,10 @@
 #
 # verify-dpu-routing.sh
 #
-# Verifies that policy routing is correctly configured inside the microVM
-# so that sandbox pod traffic (10.42.0.0/24) exits via eth1 → DPU.
+# Verifies the managed-proxy MVP guest path. For this design the guest does
+# NOT need the old table-100 policy-routing setup. It only needs a protected
+# `eth1` path that can reach the DPU-side proxy endpoint (`10.99.2.1:3128`)
+# while the main default route stays on eth0.
 #
 # Must be run as root (uses openshell-vm exec).
 #
@@ -35,7 +37,7 @@ check() {
 
     echo -ne "  ${CYAN}CHECK${NC}  $desc ... "
     local output
-    output=$("$OPENSHELL_VM_BIN" exec -- bash -c "$cmd" 2>&1) || true
+    output=$("$OPENSHELL_VM_BIN" exec -- bash -lc "$cmd" 2>&1) || true
 
     if echo "$output" | grep -qE "$expect"; then
         echo -e "${GREEN}OK${NC}"
@@ -50,11 +52,11 @@ check() {
 
 echo ""
 echo -e "${CYAN}╔═══════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║   DPU Policy Routing Verification         ║${NC}"
+echo -e "${CYAN}║   DPU Managed-Proxy Path Verification    ║${NC}"
 echo -e "${CYAN}╚═══════════════════════════════════════════╝${NC}"
 echo ""
 
-# 1. eth1 is up with correct IP (checked as two grep patterns on multiline output)
+# 1. Protected NIC exists and has the expected static address.
 check "eth1 interface is UP" \
     "ip addr show eth1" \
     "state UP"
@@ -63,27 +65,17 @@ check "eth1 has IP 10.99.2.2/24" \
     "ip addr show eth1" \
     "inet 10.99.2.2/24"
 
-# 2. Static neighbor entry exists for virtual gateway
-check "static neighbor entry for 10.99.2.1" \
-    "ip neigh show 10.99.2.1 dev eth1" \
-    "02:00:00:00:00:01.*PERMANENT"
+# 2. Reaching the DPU proxy IP should prefer eth1 from the VM's main table.
+check "route to DPU proxy IP 10.99.2.1 uses eth1" \
+    "ip route get 10.99.2.1" \
+    "dev eth1.*src 10.99.2.2|src 10.99.2.2.*dev eth1"
 
-# 3. Policy routing rule exists
-check "ip rule for 10.42.0.0/24 -> table 100" \
-    "ip rule show" \
-    "from 10.42.0.0/24 lookup 100"
-
-# 4. Route table 100 has default via eth1
-check "route table 100: default via 10.99.2.1 dev eth1" \
-    "ip route show table 100" \
-    "default via 10.99.2.1 dev eth1"
-
-# 5. Default route (main table) still points to gvproxy
+# 3. Management/default traffic must still stay on eth0.
 check "main route: default still via gvproxy (eth0)" \
     "ip route show default" \
     "default via .* dev eth0"
 
-# 6. Pod CIDR is 10.42.0.0/24
+# 4. Pod CIDR should exist so sandbox traffic can originate from the VM.
 check "pod subnet 10.42.0.0/24 configured" \
     "ip route show" \
     "10.42.0.0/24"
@@ -93,18 +85,17 @@ echo -e "  ${GREEN}Passed: $PASS${NC}  ${RED}Failed: $FAIL${NC}"
 echo ""
 
 if [[ $FAIL -gt 0 ]]; then
-    echo -e "${RED}Some checks FAILED. Policy routing may not be working.${NC}"
+    echo -e "${RED}Some checks FAILED. The guest protected path may not be ready.${NC}"
     echo ""
     echo "To debug:"
-    echo "  sudo $OPENSHELL_VM_BIN exec -- ip rule show"
-    echo "  sudo $OPENSHELL_VM_BIN exec -- ip route show table 100"
-    echo "  sudo $OPENSHELL_VM_BIN exec -- ip neigh show dev eth1"
+    echo "  sudo $OPENSHELL_VM_BIN exec -- ip addr show eth1"
+    echo "  sudo $OPENSHELL_VM_BIN exec -- ip route get 10.99.2.1"
+    echo "  sudo $OPENSHELL_VM_BIN exec -- ip route show"
     exit 1
 else
-    echo -e "${GREEN}All checks passed! Pod traffic will exit via eth1 → DPU.${NC}"
+    echo -e "${GREEN}All checks passed. The guest should reach the DPU proxy over eth1.${NC}"
     echo ""
-    echo "Next: create a sandbox and verify DPU flow counters:"
-    echo "  openshell sandbox create --policy policies/dpu-enforced.yaml --no-keep -- curl -s https://api.anthropic.com/v1/models"
-    echo "  ssh ubuntu@192.168.100.2 sudo ovs-ofctl dump-flows ovsbr2  # check pf1vf0 counters"
+    echo "Next after starting the DPU proxy:"
+    echo "  sudo $OPENSHELL_VM_BIN exec -- curl -sv --proxy http://10.99.2.1:3128 https://example.com/"
     exit 0
 fi
